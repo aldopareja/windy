@@ -67,7 +67,12 @@ class SplitFromBackgroundPoolService:
             background_window_ids=remaining_background_window_ids,
         )
 
-        self._yabai.warp_window(promoted_window_id, target.focused_window_id)
+        # Background pool members are stacked behind the focused tile, so promotion
+        # has to use yabai's supported unstack flow instead of same-stack warp.
+        self._yabai.promote_stacked_window(
+            promoted_window_id,
+            DEFAULT_PENDING_SPLIT_DIRECTION,
+        )
         self._yabai.focus_window(target.focused_window_id)
         self._state_store.write_payload(prepared_state_payload)
 

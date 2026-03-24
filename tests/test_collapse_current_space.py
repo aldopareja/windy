@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 from typing import Optional
 import unittest
+from unittest.mock import patch
 
 from runtime.yhwm.collapse import CollapseCurrentSpaceService
 from runtime.yhwm.errors import WorkflowError
@@ -13,6 +15,7 @@ from runtime.yhwm.split import (
     DEFAULT_PENDING_SPLIT_DIRECTION,
     SplitFromBackgroundPoolService,
 )
+from runtime.yhwm.yabai import SubprocessYabaiClient
 
 
 class CollapseCurrentSpaceTests(unittest.TestCase):
@@ -268,7 +271,7 @@ class SplitFromBackgroundPoolTests(unittest.TestCase):
             self.assertEqual(
                 client.actions,
                 [
-                    ("warp", 102, 101),
+                    ("promote_stacked", 102, DEFAULT_PENDING_SPLIT_DIRECTION),
                     ("focus", 101),
                 ],
             )
@@ -389,16 +392,19 @@ class SplitFromBackgroundPoolTests(unittest.TestCase):
                     eligible_window(102),
                     eligible_window(103),
                 ],
-                fail_on_warp=True,
+                fail_on_promote=True,
             )
 
-            with self.assertRaisesRegex(WorkflowError, "Failed to promote background window"):
+            with self.assertRaisesRegex(WorkflowError, "Failed to promote stacked window"):
                 SplitFromBackgroundPoolService(
                     yabai=client,
                     state_store=WorkflowStateStore(state_path),
                 ).run()
 
-            self.assertEqual(client.actions, [("warp", 102, 101)])
+            self.assertEqual(
+                client.actions,
+                [("promote_stacked", 102, DEFAULT_PENDING_SPLIT_DIRECTION)],
+            )
             self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
 
     def test_pending_split_failure_does_not_commit_state(self) -> None:
@@ -436,7 +442,7 @@ class FakeYabaiClient:
         mouse_follows_focus: str = "off",
         space_layout: str = "bsp",
         fail_on_layout: bool = False,
-        fail_on_warp: bool = False,
+        fail_on_promote: bool = False,
         fail_on_insert: bool = False,
     ) -> None:
         self.focused_window = focused_window
@@ -445,7 +451,7 @@ class FakeYabaiClient:
         self.mouse_follows_focus = mouse_follows_focus
         self.space_layout = space_layout
         self.fail_on_layout = fail_on_layout
-        self.fail_on_warp = fail_on_warp
+        self.fail_on_promote = fail_on_promote
         self.fail_on_insert = fail_on_insert
         self.actions: list[tuple] = []
 
@@ -488,12 +494,12 @@ class FakeYabaiClient:
     def stack_window(self, anchor_window_id: int, candidate_window_id: int) -> None:
         self.actions.append(("stack", anchor_window_id, candidate_window_id))
 
-    def warp_window(self, window_id: int, target_window_id: int) -> None:
-        self.actions.append(("warp", window_id, target_window_id))
-        if self.fail_on_warp:
+    def promote_stacked_window(self, window_id: int, direction: str) -> None:
+        self.actions.append(("promote_stacked", window_id, direction))
+        if self.fail_on_promote:
             raise WorkflowError(
-                "Failed to promote background window "
-                f"{window_id} into a sibling tile beside window {target_window_id}"
+                "Failed to promote stacked window "
+                f"{window_id} into a sibling {direction} split"
             )
 
     def arm_window_split(self, window_id: int, direction: str) -> None:
@@ -505,6 +511,37 @@ class FakeYabaiClient:
 
     def focus_window(self, window_id: int) -> None:
         self.actions.append(("focus", window_id))
+
+
+class SubprocessYabaiClientTests(unittest.TestCase):
+    def test_promote_stacked_window_uses_insert_and_double_float_toggle(self) -> None:
+        client = SubprocessYabaiClient(yabai_bin="/opt/homebrew/bin/yabai")
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch("runtime.yhwm.yabai.subprocess.run", side_effect=fake_run):
+            client.promote_stacked_window(102, DEFAULT_PENDING_SPLIT_DIRECTION)
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "/opt/homebrew/bin/yabai",
+                    "-m",
+                    "window",
+                    "102",
+                    "--insert",
+                    DEFAULT_PENDING_SPLIT_DIRECTION,
+                    "--toggle",
+                    "float",
+                    "--toggle",
+                    "float",
+                ]
+            ],
+        )
 
 
 def write_state_entry(

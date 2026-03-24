@@ -29,7 +29,7 @@ class YabaiClient(Protocol):
     def stack_window(self, anchor_window_id: int, candidate_window_id: int) -> None:
         ...
 
-    def warp_window(self, window_id: int, target_window_id: int) -> None:
+    def promote_stacked_window(self, window_id: int, direction: str) -> None:
         ...
 
     def arm_window_split(self, window_id: int, direction: str) -> None:
@@ -100,12 +100,22 @@ class SubprocessYabaiClient:
             ),
         )
 
-    def warp_window(self, window_id: int, target_window_id: int) -> None:
+    def promote_stacked_window(self, window_id: int, direction: str) -> None:
         self._run_text(
-            ["-m", "window", str(window_id), "--warp", str(target_window_id)],
+            [
+                "-m",
+                "window",
+                str(window_id),
+                "--insert",
+                direction,
+                "--toggle",
+                "float",
+                "--toggle",
+                "float",
+            ],
             error_context=(
-                "Failed to promote background window "
-                f"{window_id} into a sibling tile beside window {target_window_id}"
+                "Failed to promote stacked window "
+                f"{window_id} into a sibling {direction} split"
             ),
         )
 
