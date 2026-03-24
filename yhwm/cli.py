@@ -7,6 +7,7 @@ import sys
 from typing import Callable, List, Optional
 
 from .alttab_session import (
+    AltTabModifierReleaseService,
     AltTabSelectedWindowService,
     AltTabSessionArmService,
     AltTabSessionCancelService,
@@ -433,6 +434,35 @@ def alttab_session_selected_window_main(argv: Optional[List[str]] = None) -> int
         yabai=yabai,
         session_store=session_store,
         selected_window_id=selected_window_id,
+    )
+
+    try:
+        service.run()
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def alttab_session_modifier_release_main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser(
+        prog="alttab_session_modifier_release",
+        description=(
+            "Handle AltTab modifier release for one armed workflow session, "
+            "committing one same-space visible-window swap when the remembered "
+            "selected window is still a visible eligible workflow window."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    state_store = WorkflowStateStore(Path(args.state_file))
+    session_store = AltTabSessionStore(Path(args.alttab_session_file))
+    yabai = SubprocessYabaiClient(args.yabai_bin)
+    service = AltTabModifierReleaseService(
+        yabai=yabai,
+        state_store=state_store,
+        session_store=session_store,
     )
 
     try:

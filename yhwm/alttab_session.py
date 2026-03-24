@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .current_space import (
     derive_workflow_space_from_window,
+    query_eligible_windows,
     query_focused_window_record,
     query_window_record,
     validate_workflow_space,
@@ -9,6 +10,7 @@ from .current_space import (
 from .eligibility import is_eligible_window
 from .models import (
     AltTabFocusGuard,
+    AltTabModifierReleaseResult,
     AltTabSessionArmResult,
     AltTabSessionCancelResult,
     ArmedAltTabSession,
@@ -106,6 +108,7 @@ class AltTabSessionArmService:
             ArmedAltTabSession(
                 origin_window_id=focused_window_id,
                 origin_workflow_space=workflow_space,
+                selected_window_id=focused_window_id,
             )
         )
         return AltTabSessionArmResult(
@@ -201,6 +204,13 @@ class AltTabSelectedWindowService:
                 session_active=False,
             )
 
+        self._session_store.arm_session(
+            ArmedAltTabSession(
+                origin_window_id=armed_session.origin_window_id,
+                origin_workflow_space=armed_session.origin_workflow_space,
+                selected_window_id=self._selected_window_id,
+            )
+        )
         return AltTabSessionCancelResult(
             workflow_space=armed_session.origin_workflow_space,
             origin_window_id=armed_session.origin_window_id,
@@ -208,4 +218,200 @@ class AltTabSelectedWindowService:
             reason="selected_window",
             action="ignored_same_origin_space_selection",
             session_active=True,
+        )
+
+
+class AltTabModifierReleaseService:
+    def __init__(
+        self,
+        *,
+        yabai: YabaiClient,
+        state_store: WorkflowStateStore,
+        session_store: AltTabSessionStore,
+    ):
+        self._yabai = yabai
+        self._state_store = state_store
+        self._session_store = session_store
+
+    def run(self) -> AltTabModifierReleaseResult:
+        armed_session = self._session_store.read_session()
+        if armed_session is None:
+            return AltTabModifierReleaseResult(
+                workflow_space=None,
+                origin_window_id=None,
+                selected_window_id=None,
+                action="ignored_no_armed_session",
+                visible_window_id=None,
+                background_window_ids=[],
+                pending_split_direction=None,
+                session_active=False,
+            )
+
+        selected_window_id = (
+            armed_session.selected_window_id or armed_session.origin_window_id
+        )
+        if selected_window_id == armed_session.origin_window_id:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_origin_still_selected",
+                visible_window_id=armed_session.origin_window_id,
+                background_window_ids=[],
+                pending_split_direction=None,
+                session_active=False,
+            )
+
+        persisted_space_state = self._state_store.read_space_state(
+            armed_session.origin_workflow_space
+        )
+        if persisted_space_state is None:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="ignored_untracked_space",
+                visible_window_id=None,
+                background_window_ids=[],
+                pending_split_direction=None,
+                session_active=False,
+            )
+
+        validate_workflow_space(
+            self._yabai,
+            workflow_space=armed_session.origin_workflow_space,
+            allowed_layouts=("bsp",),
+        )
+        origin_window = query_window_record(
+            self._yabai,
+            window_id=armed_session.origin_window_id,
+            description=f"origin window {armed_session.origin_window_id}",
+        )
+        origin_workflow_space = derive_workflow_space_from_window(
+            origin_window,
+            description=f"origin window {armed_session.origin_window_id}",
+        )
+        if origin_workflow_space != armed_session.origin_workflow_space or not is_eligible_window(
+            origin_window,
+            target_display=armed_session.origin_workflow_space.display,
+            target_space=armed_session.origin_workflow_space.space,
+        ):
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_ineligible_origin_window",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        selected_window = query_window_record(
+            self._yabai,
+            window_id=selected_window_id,
+            description=f"selected window {selected_window_id}",
+        )
+        selected_workflow_space = derive_workflow_space_from_window(
+            selected_window,
+            description=f"selected window {selected_window_id}",
+        )
+        if selected_workflow_space != armed_session.origin_workflow_space:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_cross_space_or_display_selection",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        if not is_eligible_window(
+            selected_window,
+            target_display=armed_session.origin_workflow_space.display,
+            target_space=armed_session.origin_workflow_space.space,
+        ):
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_ineligible_selected_window",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        eligible_window_ids = {
+            window["id"]
+            for window in query_eligible_windows(
+                self._yabai,
+                workflow_space=armed_session.origin_workflow_space,
+            )
+        }
+        if armed_session.origin_window_id not in eligible_window_ids:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_missing_origin_window",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        if selected_window_id not in eligible_window_ids:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_missing_selected_window",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        if selected_window_id in persisted_space_state.background_window_ids:
+            self._session_store.disarm_session()
+            return AltTabModifierReleaseResult(
+                workflow_space=armed_session.origin_workflow_space,
+                origin_window_id=armed_session.origin_window_id,
+                selected_window_id=selected_window_id,
+                action="canceled_background_window_selection",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+                session_active=False,
+            )
+
+        prepared_state_payload = self._state_store.prepare_background_pool_payload(
+            workflow_space=armed_session.origin_workflow_space,
+            visible_window_id=selected_window_id,
+            background_window_ids=persisted_space_state.background_window_ids,
+            pending_split_direction=persisted_space_state.pending_split_direction,
+        )
+        self._yabai.swap_window(armed_session.origin_window_id, selected_window_id)
+        self._yabai.focus_window(selected_window_id)
+        self._state_store.write_payload(prepared_state_payload)
+        self._session_store.disarm_session()
+        return AltTabModifierReleaseResult(
+            workflow_space=armed_session.origin_workflow_space,
+            origin_window_id=armed_session.origin_window_id,
+            selected_window_id=selected_window_id,
+            action="committed_visible_window_swap",
+            visible_window_id=selected_window_id,
+            background_window_ids=list(persisted_space_state.background_window_ids),
+            pending_split_direction=persisted_space_state.pending_split_direction,
+            session_active=False,
         )

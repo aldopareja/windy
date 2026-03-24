@@ -44,6 +44,9 @@ class YabaiClient(Protocol):
     def focus_window(self, window_id: int) -> None:
         ...
 
+    def swap_window(self, window_id: int, target_window_id: int) -> None:
+        ...
+
 
 class SubprocessYabaiClient:
     def __init__(self, yabai_bin: str = "yabai"):
@@ -151,6 +154,15 @@ class SubprocessYabaiClient:
         self._run_text(
             ["-m", "window", "--focus", str(window_id)],
             error_context=f"Failed to refocus window {window_id} after workflow mutation",
+        )
+
+    def swap_window(self, window_id: int, target_window_id: int) -> None:
+        self._run_text(
+            ["-m", "window", str(window_id), "--swap", str(target_window_id)],
+            error_context=(
+                "Failed to swap visible workflow windows "
+                f"{window_id} and {target_window_id}"
+            ),
         )
 
     def _run_json(self, arguments: List[str], *, error_context: str) -> Any:

@@ -102,6 +102,7 @@ class TrackedVisibleWindowExitRecoveryResult:
 class ArmedAltTabSession:
     origin_window_id: int
     origin_workflow_space: EligibleWorkflowSpace
+    selected_window_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -125,4 +126,16 @@ class AltTabSessionCancelResult:
     selected_window_id: Optional[int]
     reason: str
     action: str
+    session_active: bool
+
+
+@dataclass(frozen=True)
+class AltTabModifierReleaseResult:
+    workflow_space: Optional[EligibleWorkflowSpace]
+    origin_window_id: Optional[int]
+    selected_window_id: Optional[int]
+    action: str
+    visible_window_id: Optional[int]
+    background_window_ids: List[int]
+    pending_split_direction: Optional[str]
     session_active: bool

@@ -378,12 +378,24 @@ class AltTabSessionStore:
                 f"'origin_space' must be a positive integer in {self._path}"
             )
 
+        selected_window_id = raw_session.get("selected_window_id")
+        if selected_window_id is None:
+            normalized_selected_window_id = origin_window_id
+        else:
+            if not isinstance(selected_window_id, int) or selected_window_id <= 0:
+                raise WorkflowError(
+                    "AltTab session file has invalid schema: "
+                    f"'selected_window_id' must be a positive integer when present in {self._path}"
+                )
+            normalized_selected_window_id = selected_window_id
+
         return ArmedAltTabSession(
             origin_window_id=origin_window_id,
             origin_workflow_space=EligibleWorkflowSpace(
                 display=origin_display,
                 space=origin_space,
             ),
+            selected_window_id=normalized_selected_window_id,
         )
 
     def _parse_focus_guard(self, raw_focus_guard: Any) -> Optional[AltTabFocusGuard]:
@@ -481,6 +493,8 @@ class AltTabSessionStore:
                 "origin_space": session.origin_workflow_space.space,
                 "updated_at": _utc_now(),
             }
+            if session.selected_window_id is not None:
+                payload["session"]["selected_window_id"] = session.selected_window_id
         if focus_guard is not None:
             focus_guard_payload: Dict[str, Any] = {
                 "display": focus_guard.workflow_space.display,

@@ -518,6 +518,9 @@ class FakeYabaiClient:
     def focus_window(self, window_id: int) -> None:
         self.actions.append(("focus", window_id))
 
+    def swap_window(self, window_id: int, target_window_id: int) -> None:
+        self.actions.append(("swap", window_id, target_window_id))
+
 
 class SubprocessYabaiClientTests(unittest.TestCase):
     def test_promote_stacked_window_uses_insert_and_double_float_toggle(self) -> None:
@@ -545,6 +548,31 @@ class SubprocessYabaiClientTests(unittest.TestCase):
                     "float",
                     "--toggle",
                     "float",
+                ]
+            ],
+        )
+
+    def test_swap_window_uses_direct_window_selector(self) -> None:
+        client = SubprocessYabaiClient(yabai_bin="/opt/homebrew/bin/yabai")
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch("runtime.yhwm.yabai.subprocess.run", side_effect=fake_run):
+            client.swap_window(101, 201)
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "/opt/homebrew/bin/yabai",
+                    "-m",
+                    "window",
+                    "101",
+                    "--swap",
+                    "201",
                 ]
             ],
         )
