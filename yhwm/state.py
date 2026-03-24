@@ -20,6 +20,10 @@ class WorkflowStateStore:
         return runtime_root / "state" / "workflow_state.json"
 
     def record_collapse(self, result: CollapseResult) -> None:
+        payload = self.prepare_collapse_payload(result)
+        self.write_payload(payload)
+
+    def prepare_collapse_payload(self, result: CollapseResult) -> Dict[str, Any]:
         payload = self._load()
         spaces = payload.setdefault("spaces", {})
         spaces[result.workflow_space.storage_key] = {
@@ -27,6 +31,9 @@ class WorkflowStateStore:
             "updated_at": _utc_now(),
         }
         payload["schema_version"] = 1
+        return payload
+
+    def write_payload(self, payload: Dict[str, Any]) -> None:
         self._write(payload)
 
     def _load(self) -> Dict[str, Any]:

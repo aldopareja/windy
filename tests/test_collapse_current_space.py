@@ -120,6 +120,79 @@ class CollapseCurrentSpaceTests(unittest.TestCase):
             self.assertEqual(client.actions, [("set_layout", 2, "bsp")])
             self.assertFalse(state_path.exists())
 
+    def test_focus_follows_mouse_disabled_alias_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101), eligible_window(102)],
+                focus_follows_mouse="disabled",
+            )
+
+            result = CollapseCurrentSpaceService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+            ).run()
+
+            self.assertEqual(result.background_window_ids, [102])
+            self.assertEqual(
+                client.actions,
+                [
+                    ("set_layout", 2, "bsp"),
+                    ("stack", 101, 102),
+                    ("focus", 101),
+                ],
+            )
+
+    def test_non_standard_window_level_is_filtered_out_of_the_background_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(400, layer="above", level=3),
+                    eligible_window(401, layer="unknown", level=7),
+                ],
+            )
+
+            result = CollapseCurrentSpaceService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+            ).run()
+
+            self.assertEqual(result.background_window_ids, [102])
+            self.assertEqual(
+                client.actions,
+                [
+                    ("set_layout", 2, "bsp"),
+                    ("stack", 101, 102),
+                    ("focus", 101),
+                ],
+            )
+
+    def test_invalid_persisted_state_blocks_mutation_before_collapse_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            state_path.write_text("{ invalid json\n", encoding="utf-8")
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101), eligible_window(102)],
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "not valid JSON"):
+                CollapseCurrentSpaceService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(
+                state_path.read_text(encoding="utf-8"),
+                "{ invalid json\n",
+            )
+
 
 class FakeYabaiClient:
     def __init__(
@@ -193,6 +266,8 @@ def eligible_window(window_id: int, **overrides: object) -> dict:
         "subrole": "AXStandardWindow",
         "can-move": True,
         "has-ax-reference": True,
+        "level": 0,
+        "layer": "normal",
         "is-floating": False,
         "is-sticky": False,
         "is-native-fullscreen": False,

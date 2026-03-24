@@ -58,17 +58,18 @@ class CollapseCurrentSpaceService:
             window_id for window_id in eligible_window_ids if window_id != focused_window_id
         ]
 
-        self._yabai.set_space_layout(workflow_space.space, "bsp")
-        for background_window_id in background_window_ids:
-            self._yabai.stack_window(focused_window_id, background_window_id)
-        self._yabai.focus_window(focused_window_id)
-
         result = CollapseResult(
             workflow_space=workflow_space,
             focused_window_id=focused_window_id,
             background_window_ids=background_window_ids,
         )
-        self._state_store.record_collapse(result)
+        prepared_state_payload = self._state_store.prepare_collapse_payload(result)
+
+        self._yabai.set_space_layout(workflow_space.space, "bsp")
+        for background_window_id in background_window_ids:
+            self._yabai.stack_window(focused_window_id, background_window_id)
+        self._yabai.focus_window(focused_window_id)
+        self._state_store.write_payload(prepared_state_payload)
         return result
 
     def _filter_eligible_windows(
@@ -90,14 +91,16 @@ class CollapseCurrentSpaceService:
         return eligible_windows
 
     def _validate_environment(self, space: int) -> None:
-        focus_follows_mouse = self._yabai.get_config("focus_follows_mouse")
+        focus_follows_mouse = _normalize_focus_follows_mouse(
+            self._yabai.get_config("focus_follows_mouse")
+        )
         if focus_follows_mouse != "off":
             raise WorkflowError(
                 "Incompatible yabai environment: focus_follows_mouse must be 'off' "
                 f"but is '{focus_follows_mouse}'."
             )
 
-        mouse_follows_focus = self._yabai.get_config("mouse_follows_focus")
+        mouse_follows_focus = _normalize_off_config(self._yabai.get_config("mouse_follows_focus"))
         if mouse_follows_focus != "off":
             raise WorkflowError(
                 "Incompatible yabai environment: mouse_follows_focus must be 'off' "
@@ -158,3 +161,23 @@ class CollapseCurrentSpaceService:
                 f"Expected yabai to provide an integer '{key}' for {description}."
             )
         return value
+
+
+def _normalize_focus_follows_mouse(value: Any) -> str:
+    normalized = _normalize_config_value(value)
+    if normalized == "disabled":
+        return "off"
+    return normalized
+
+
+def _normalize_off_config(value: Any) -> str:
+    normalized = _normalize_config_value(value)
+    if normalized in {"disabled", "false", "0"}:
+        return "off"
+    return normalized
+
+
+def _normalize_config_value(value: Any) -> str:
+    if not isinstance(value, str):
+        raise WorkflowError("Expected yabai config queries to return text values.")
+    return value.strip().lower()
