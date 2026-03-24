@@ -18,7 +18,7 @@ from runtime.yhwm.tracked_visible_window_exit_recovery import (
 
 
 class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
-    def test_background_candidate_is_promoted_and_removed_from_background_pool(
+    def test_stacked_background_candidate_is_promoted_and_removed_from_background_pool(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -30,8 +30,8 @@ class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
             )
             client = FakeTrackedVisibleWindowExitRecoveryYabaiClient(
                 window_records={
-                    102: eligible_window(102, **{"stack-index": 1}),
-                    103: eligible_window(103, **{"stack-index": 2}),
+                    102: eligible_window(102, **{"stack-index": 2}),
+                    103: eligible_window(103, **{"stack-index": 3}),
                     201: eligible_window(201, **{"stack-index": 0}),
                 },
                 space_windows={
@@ -59,7 +59,9 @@ class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
             self.assertNotIn("pending_split_direction", payload["spaces"]["1:2"])
 
-    def test_visible_background_candidate_is_retargeted_without_promotion(self) -> None:
+    def test_visible_stack_top_background_candidate_is_retargeted_without_promotion(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_path = Path(tempdir) / "workflow_state.json"
             write_state_entry(
@@ -69,12 +71,11 @@ class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
             )
             client = FakeTrackedVisibleWindowExitRecoveryYabaiClient(
                 window_records={
-                    102: eligible_window(102, **{"stack-index": 0}),
-                    103: eligible_window(103, **{"stack-index": 1}),
-                    201: eligible_window(201, **{"stack-index": 0}),
+                    102: eligible_window(102, **{"stack-index": 1}),
+                    103: eligible_window(103, **{"stack-index": 2}),
                 },
                 space_windows={
-                    2: [102, 103, 201],
+                    2: [102, 103],
                 },
             )
 
@@ -93,6 +94,40 @@ class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 102)
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
+
+    def test_visible_background_tiles_are_removed_from_background_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[102, 103],
+            )
+            client = FakeTrackedVisibleWindowExitRecoveryYabaiClient(
+                window_records={
+                    102: eligible_window(102, **{"stack-index": 0}),
+                    103: eligible_window(103, **{"stack-index": 0}),
+                },
+                space_windows={
+                    2: [102, 103],
+                },
+            )
+
+            result = TrackedVisibleWindowExitRecoveryService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=101,
+                event=WINDOW_DESTROYED_EVENT,
+            ).run()
+
+            self.assertEqual(result.action, "recovered_with_background_window")
+            self.assertEqual(result.visible_window_id, 102)
+            self.assertEqual(result.background_window_ids, [])
+            self.assertEqual(client.actions, [])
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 102)
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [])
 
     def test_no_background_candidates_retargets_to_remaining_visible_window(
         self,
@@ -407,8 +442,8 @@ class TrackedVisibleWindowExitRecoveryServiceTests(unittest.TestCase):
             original_state = state_path.read_text(encoding="utf-8")
             client = FakeTrackedVisibleWindowExitRecoveryYabaiClient(
                 window_records={
-                    102: eligible_window(102, **{"stack-index": 1}),
-                    103: eligible_window(103, **{"stack-index": 2}),
+                    102: eligible_window(102, **{"stack-index": 2}),
+                    103: eligible_window(103, **{"stack-index": 3}),
                     201: eligible_window(201, **{"stack-index": 0}),
                 },
                 space_windows={

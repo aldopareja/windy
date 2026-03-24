@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from .current_space import query_eligible_windows, validate_workflow_space
@@ -16,6 +17,13 @@ WINDOW_DESTROYED_EVENT = "window_destroyed"
 SUPPORTED_TRACKED_VISIBLE_WINDOW_EXIT_EVENTS = frozenset(
     {WINDOW_DESTROYED_EVENT, "window_minimized", "window_moved"}
 )
+
+
+@dataclass(frozen=True)
+class _EligibleWindowVisibilityState:
+    eligible_window_ids: list[int]
+    visible_window_ids: list[int]
+    background_window_ids: list[int]
 
 
 class TrackedVisibleWindowExitRecoveryService:
@@ -69,8 +77,8 @@ class TrackedVisibleWindowExitRecoveryService:
             self._yabai,
             workflow_space=matched_space_state.workflow_space,
         )
-        eligible_window_ids = [int(window["id"]) for window in eligible_windows]
-        if self._window_id in eligible_window_ids:
+        visibility_state = _resolve_eligible_window_visibility_state(eligible_windows)
+        if self._window_id in visibility_state.eligible_window_ids:
             return TrackedVisibleWindowExitRecoveryResult(
                 window_id=self._window_id,
                 event=normalized_event,
@@ -83,17 +91,15 @@ class TrackedVisibleWindowExitRecoveryService:
 
         refreshed_background_window_ids = _refresh_background_window_ids(
             persisted_background_window_ids=matched_space_state.background_window_ids,
-            eligible_window_ids=eligible_window_ids,
+            eligible_background_window_ids=visibility_state.background_window_ids,
         )
-        visible_window_ids = _resolve_visible_window_ids(eligible_windows)
+        visible_background_window_ids = _resolve_visible_background_window_ids(
+            persisted_background_window_ids=matched_space_state.background_window_ids,
+            visible_window_ids=visibility_state.visible_window_ids,
+        )
 
-        visible_background_candidate = next(
-            (
-                window_id
-                for window_id in refreshed_background_window_ids
-                if window_id in visible_window_ids
-            ),
-            None,
+        visible_background_candidate = (
+            visible_background_window_ids[0] if visible_background_window_ids else None
         )
         if visible_background_candidate is not None:
             return self._commit_background_recovery(
@@ -111,7 +117,7 @@ class TrackedVisibleWindowExitRecoveryService:
                 should_promote=True,
             )
 
-        remaining_visible_window_ids = list(visible_window_ids)
+        remaining_visible_window_ids = list(visibility_state.visible_window_ids)
         if remaining_visible_window_ids:
             next_visible_window_id = remaining_visible_window_ids[0]
             prepared_state_payload = self._state_store.prepare_background_pool_payload(
@@ -201,28 +207,44 @@ def _resolve_matched_space_state(
 def _refresh_background_window_ids(
     *,
     persisted_background_window_ids: Iterable[int],
-    eligible_window_ids: Iterable[int],
+    eligible_background_window_ids: Iterable[int],
 ) -> list[int]:
-    eligible_window_id_set = set(eligible_window_ids)
+    eligible_background_window_id_set = set(eligible_background_window_ids)
     return [
         window_id
         for window_id in persisted_background_window_ids
-        if window_id in eligible_window_id_set
+        if window_id in eligible_background_window_id_set
     ]
 
 
-def _resolve_visible_window_ids(
-    eligible_windows: Iterable[Mapping[str, Any]],
+def _resolve_visible_background_window_ids(
+    *,
+    persisted_background_window_ids: Iterable[int],
+    visible_window_ids: Iterable[int],
 ) -> list[int]:
+    visible_window_id_set = set(visible_window_ids)
+    return [
+        window_id
+        for window_id in persisted_background_window_ids
+        if window_id in visible_window_id_set
+    ]
+
+
+def _resolve_eligible_window_visibility_state(
+    eligible_windows: Iterable[Mapping[str, Any]],
+) -> _EligibleWindowVisibilityState:
+    eligible_window_ids: list[int] = []
     visible_window_ids: list[int] = []
+    background_window_ids: list[int] = []
     for window in eligible_windows:
         window_id = window.get("id")
         if not isinstance(window_id, int):
             raise WorkflowError(
                 "Expected yabai to provide an integer 'id' for an eligible workflow window."
             )
+        eligible_window_ids.append(window_id)
         stack_index = window.get("stack-index")
-        if stack_index is None or stack_index == 0:
+        if stack_index is None:
             visible_window_ids.append(window_id)
             continue
         if not isinstance(stack_index, int):
@@ -230,7 +252,15 @@ def _resolve_visible_window_ids(
                 "Expected yabai to provide an integer 'stack-index' for eligible "
                 f"workflow window {window_id}."
             )
-    return visible_window_ids
+        if stack_index <= 1:
+            visible_window_ids.append(window_id)
+            continue
+        background_window_ids.append(window_id)
+    return _EligibleWindowVisibilityState(
+        eligible_window_ids=eligible_window_ids,
+        visible_window_ids=visible_window_ids,
+        background_window_ids=background_window_ids,
+    )
 
 
 def _normalize_supported_visible_window_exit_event(raw_event: str) -> str:
