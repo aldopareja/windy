@@ -163,54 +163,6 @@ class AltTabVisibleToVisibleSwapTests(unittest.TestCase):
             self.assertEqual(client.actions, [])
             self.assertIsNone(session_store.read_session())
 
-    def test_modifier_release_with_background_selection_is_canceled_without_mutation(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_path = Path(tempdir) / "workflow_state.json"
-            session_path = Path(tempdir) / "alttab_session.json"
-            write_state_entry(
-                state_path,
-                visible_window_id=101,
-                background_window_ids=[102],
-            )
-            original_state = state_path.read_text(encoding="utf-8")
-            client = FakeAltTabSwapYabaiClient(
-                focused_window_id=101,
-                window_records={
-                    101: eligible_window(101, **{"has-focus": True}),
-                    102: eligible_window(102),
-                    201: eligible_window(201),
-                },
-                space_windows={2: [101, 102, 201]},
-            )
-            session_store = AltTabSessionStore(session_path)
-
-            AltTabSessionArmService(
-                yabai=client,
-                state_store=WorkflowStateStore(state_path),
-                session_store=session_store,
-            ).run()
-            AltTabSelectedWindowService(
-                yabai=client,
-                session_store=session_store,
-                selected_window_id=102,
-            ).run()
-
-            release_result = AltTabModifierReleaseService(
-                yabai=client,
-                state_store=WorkflowStateStore(state_path),
-                session_store=session_store,
-            ).run()
-
-            self.assertEqual(
-                release_result.action,
-                "canceled_background_window_selection",
-            )
-            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
-            self.assertEqual(client.actions, [])
-            self.assertIsNone(session_store.read_session())
-
     def test_modifier_release_without_armed_session_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_path = Path(tempdir) / "workflow_state.json"
@@ -289,6 +241,7 @@ class FakeAltTabSwapYabaiClient:
         space_layouts: dict[int, str] | None = None,
         fail_on_query_window_id: int | None = None,
         fail_on_swap: bool = False,
+        fail_on_focus: bool = False,
     ) -> None:
         self.focused_window_id = focused_window_id
         self.window_records = {
@@ -306,6 +259,7 @@ class FakeAltTabSwapYabaiClient:
         self.space_layouts = space_layouts or {}
         self.fail_on_query_window_id = fail_on_query_window_id
         self.fail_on_swap = fail_on_swap
+        self.fail_on_focus = fail_on_focus
         self.actions: list[tuple[object, ...]] = []
 
     def get_config(self, setting: str, *, space: int | None = None) -> str:
@@ -372,6 +326,10 @@ class FakeAltTabSwapYabaiClient:
 
     def focus_window(self, window_id: int) -> None:
         self.actions.append(("focus", window_id))
+        if self.fail_on_focus:
+            raise WorkflowError(
+                f"Failed to refocus window {window_id} after workflow mutation"
+            )
         self.focused_window_id = window_id
 
     def swap_window(self, window_id: int, target_window_id: int) -> None:

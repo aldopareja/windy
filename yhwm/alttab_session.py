@@ -383,14 +383,29 @@ class AltTabModifierReleaseService:
             )
 
         if selected_window_id in persisted_space_state.background_window_ids:
+            refreshed_background_window_ids = [
+                window_id
+                for window_id in persisted_space_state.background_window_ids
+                if window_id != selected_window_id
+            ]
+            if armed_session.origin_window_id not in refreshed_background_window_ids:
+                refreshed_background_window_ids.append(armed_session.origin_window_id)
+            prepared_state_payload = self._state_store.prepare_background_pool_payload(
+                workflow_space=armed_session.origin_workflow_space,
+                visible_window_id=selected_window_id,
+                background_window_ids=refreshed_background_window_ids,
+                pending_split_direction=persisted_space_state.pending_split_direction,
+            )
+            self._yabai.focus_window(selected_window_id)
+            self._state_store.write_payload(prepared_state_payload)
             self._session_store.disarm_session()
             return AltTabModifierReleaseResult(
                 workflow_space=armed_session.origin_workflow_space,
                 origin_window_id=armed_session.origin_window_id,
                 selected_window_id=selected_window_id,
-                action="canceled_background_window_selection",
-                visible_window_id=persisted_space_state.visible_window_id,
-                background_window_ids=list(persisted_space_state.background_window_ids),
+                action="committed_background_window_replacement",
+                visible_window_id=selected_window_id,
+                background_window_ids=refreshed_background_window_ids,
                 pending_split_direction=persisted_space_state.pending_split_direction,
                 session_active=False,
             )
