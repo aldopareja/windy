@@ -4,21 +4,58 @@ import argparse
 import os
 from pathlib import Path
 import sys
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from .collapse import CollapseCurrentSpaceService
 from .errors import WorkflowError
 from .state import WorkflowStateStore
+from .split import SplitFromBackgroundPoolService
 from .yabai import SubprocessYabaiClient
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = _build_parser()
+    return collapse_main(argv)
+
+
+def collapse_main(argv: Optional[List[str]] = None) -> int:
+    return _run_service_command(
+        argv=argv,
+        prog="collapse_current_space",
+        description=(
+            "Collapse the current eligible workflow space so the focused eligible "
+            "window stays visible and other eligible windows become background "
+            "stack members."
+        ),
+        service_factory=CollapseCurrentSpaceService,
+    )
+
+
+def split_main(argv: Optional[List[str]] = None) -> int:
+    return _run_service_command(
+        argv=argv,
+        prog="split_from_background_pool",
+        description=(
+            "Split the focused eligible workflow tile by promoting one eligible "
+            "background window from the same workflow space when available, or "
+            "leave a native pending split when none are available."
+        ),
+        service_factory=SplitFromBackgroundPoolService,
+    )
+
+
+def _run_service_command(
+    *,
+    argv: Optional[List[str]],
+    prog: str,
+    description: str,
+    service_factory: Callable[..., object],
+) -> int:
+    parser = _build_parser(prog=prog, description=description)
     args = parser.parse_args(argv)
 
     state_store = WorkflowStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
-    service = CollapseCurrentSpaceService(yabai=yabai, state_store=state_store)
+    service = service_factory(yabai=yabai, state_store=state_store)
 
     try:
         service.run()
@@ -29,14 +66,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(*, prog: str, description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="collapse_current_space",
-        description=(
-            "Collapse the current eligible workflow space so the focused eligible "
-            "window stays visible and other eligible windows become background "
-            "stack members."
-        ),
+        prog=prog,
+        description=description,
     )
     parser.add_argument(
         "--yabai-bin",

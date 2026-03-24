@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .errors import WorkflowError
-from .models import CollapseResult
+from .models import CollapseResult, EligibleWorkflowSpace
 
 
 class WorkflowStateStore:
@@ -24,10 +24,41 @@ class WorkflowStateStore:
         self.write_payload(payload)
 
     def prepare_collapse_payload(self, result: CollapseResult) -> Dict[str, Any]:
+        return self.prepare_background_pool_payload(
+            workflow_space=result.workflow_space,
+            visible_window_id=result.focused_window_id,
+            background_window_ids=result.background_window_ids,
+        )
+
+    def read_background_window_ids(
+        self, workflow_space: EligibleWorkflowSpace
+    ) -> List[int]:
+        payload = self._load()
+        spaces = payload["spaces"]
+        entry = spaces.get(workflow_space.storage_key)
+        if entry is None:
+            return []
+
+        validated_entry = self._validate_space_entry(
+            workflow_space=workflow_space,
+            raw_entry=entry,
+        )
+        return list(validated_entry["background_window_ids"])
+
+    def prepare_background_pool_payload(
+        self,
+        *,
+        workflow_space: EligibleWorkflowSpace,
+        visible_window_id: int,
+        background_window_ids: List[int],
+    ) -> Dict[str, Any]:
         payload = self._load()
         spaces = payload.setdefault("spaces", {})
-        spaces[result.workflow_space.storage_key] = {
-            **result.to_state_payload(),
+        spaces[workflow_space.storage_key] = {
+            "display": workflow_space.display,
+            "space": workflow_space.space,
+            "visible_window_id": visible_window_id,
+            "background_window_ids": list(background_window_ids),
             "updated_at": _utc_now(),
         }
         payload["schema_version"] = 1
@@ -41,7 +72,12 @@ class WorkflowStateStore:
             return {"schema_version": 1, "spaces": {}}
 
         try:
-            payload = json.loads(self._path.read_text(encoding="utf-8"))
+            raw_text = self._path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WorkflowError(f"Workflow state file is not readable: {self._path}") from exc
+
+        try:
+            payload = json.loads(raw_text)
         except json.JSONDecodeError as exc:
             raise WorkflowError(
                 f"Workflow state file is not valid JSON: {self._path}"
@@ -89,6 +125,76 @@ class WorkflowStateStore:
 
         normalized_payload["spaces"] = normalized_spaces
         return normalized_payload
+
+    def _validate_space_entry(
+        self,
+        *,
+        workflow_space: EligibleWorkflowSpace,
+        raw_entry: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(raw_entry, dict):
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' must be an object in {self._path}"
+            )
+
+        entry = dict(raw_entry)
+
+        display = entry.get("display")
+        if not isinstance(display, int):
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' must contain integer 'display' "
+                f"in {self._path}"
+            )
+
+        space = entry.get("space")
+        if not isinstance(space, int):
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' must contain integer 'space' "
+                f"in {self._path}"
+            )
+
+        if display != workflow_space.display or space != workflow_space.space:
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' does not match its stored display/space "
+                f"in {self._path}"
+            )
+
+        visible_window_id = entry.get("visible_window_id")
+        if not isinstance(visible_window_id, int):
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' must contain integer "
+                f"'visible_window_id' in {self._path}"
+            )
+
+        background_window_ids = entry.get("background_window_ids")
+        if not isinstance(background_window_ids, list):
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space entry '{workflow_space.storage_key}' must contain array "
+                f"'background_window_ids' in {self._path}"
+            )
+
+        normalized_background_window_ids: List[int] = []
+        for window_id in background_window_ids:
+            if not isinstance(window_id, int):
+                raise WorkflowError(
+                    "Workflow state file has invalid schema: "
+                    f"space entry '{workflow_space.storage_key}' must contain only integer "
+                    f"background window ids in {self._path}"
+                )
+            normalized_background_window_ids.append(window_id)
+
+        return {
+            "display": display,
+            "space": space,
+            "visible_window_id": visible_window_id,
+            "background_window_ids": normalized_background_window_ids,
+        }
 
     def _write(self, payload: Dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

@@ -29,6 +29,12 @@ class YabaiClient(Protocol):
     def stack_window(self, anchor_window_id: int, candidate_window_id: int) -> None:
         ...
 
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        ...
+
+    def arm_window_split(self, window_id: int, direction: str) -> None:
+        ...
+
     def focus_window(self, window_id: int) -> None:
         ...
 
@@ -94,10 +100,27 @@ class SubprocessYabaiClient:
             ),
         )
 
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        self._run_text(
+            ["-m", "window", str(window_id), "--warp", str(target_window_id)],
+            error_context=(
+                "Failed to promote background window "
+                f"{window_id} into a sibling tile beside window {target_window_id}"
+            ),
+        )
+
+    def arm_window_split(self, window_id: int, direction: str) -> None:
+        self._run_text(
+            ["-m", "window", str(window_id), "--insert", direction],
+            error_context=(
+                f"Failed to arm a pending {direction} split on window {window_id}"
+            ),
+        )
+
     def focus_window(self, window_id: int) -> None:
         self._run_text(
             ["-m", "window", "--focus", str(window_id)],
-            error_context=f"Failed to refocus window {window_id} after collapse",
+            error_context=f"Failed to refocus window {window_id} after workflow mutation",
         )
 
     def _run_json(self, arguments: List[str], *, error_context: str) -> Any:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -28,3 +28,11 @@ class CollapseResult:
             "background_window_ids": list(self.background_window_ids),
         }
 
+
+@dataclass(frozen=True)
+class SplitResult:
+    workflow_space: EligibleWorkflowSpace
+    focused_window_id: int
+    promoted_window_id: Optional[int]
+    background_window_ids: List[int]
+    pending_split_direction: Optional[str]

@@ -9,6 +9,10 @@ import unittest
 from runtime.yhwm.collapse import CollapseCurrentSpaceService
 from runtime.yhwm.errors import WorkflowError
 from runtime.yhwm.state import WorkflowStateStore
+from runtime.yhwm.split import (
+    DEFAULT_PENDING_SPLIT_DIRECTION,
+    SplitFromBackgroundPoolService,
+)
 
 
 class CollapseCurrentSpaceTests(unittest.TestCase):
@@ -233,6 +237,195 @@ class CollapseCurrentSpaceTests(unittest.TestCase):
             )
 
 
+class SplitFromBackgroundPoolTests(unittest.TestCase):
+    def test_split_from_background_pool_promotes_one_background_window_and_updates_pool(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                background_window_ids=[102, 103],
+                visible_window_id=101,
+            )
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(103),
+                ],
+            )
+
+            result = SplitFromBackgroundPoolService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+            ).run()
+
+            self.assertEqual(result.promoted_window_id, 102)
+            self.assertEqual(result.background_window_ids, [103])
+            self.assertIsNone(result.pending_split_direction)
+            self.assertEqual(
+                client.actions,
+                [
+                    ("warp", 102, 101),
+                    ("focus", 101),
+                ],
+            )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 101)
+
+    def test_missing_background_entry_arms_native_pending_split_without_state_commit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101)],
+            )
+
+            result = SplitFromBackgroundPoolService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+            ).run()
+
+            self.assertIsNone(result.promoted_window_id)
+            self.assertEqual(result.background_window_ids, [])
+            self.assertEqual(
+                result.pending_split_direction,
+                DEFAULT_PENDING_SPLIT_DIRECTION,
+            )
+            self.assertEqual(
+                client.actions,
+                [("insert", 101, DEFAULT_PENDING_SPLIT_DIRECTION)],
+            )
+            self.assertFalse(state_path.exists())
+
+    def test_split_ignores_stale_and_ineligible_background_ids_and_refreshes_pool(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                background_window_ids=[900, 901, 102, 103],
+                visible_window_id=101,
+            )
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(103),
+                    eligible_window(900, **{"is-hidden": True}),
+                    eligible_window(901, display=2),
+                ],
+            )
+
+            result = SplitFromBackgroundPoolService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+            ).run()
+
+            self.assertEqual(result.promoted_window_id, 102)
+            self.assertEqual(result.background_window_ids, [103])
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
+
+    def test_invalid_background_pool_entry_blocks_mutation_before_split_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "spaces": {
+                            "1:2": {
+                                "display": 1,
+                                "space": 2,
+                                "visible_window_id": 101,
+                                "background_window_ids": ["102"],
+                            }
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101), eligible_window(102)],
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "invalid schema"):
+                SplitFromBackgroundPoolService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["spaces"]["1:2"]["background_window_ids"],
+                ["102"],
+            )
+
+    def test_split_promotion_failure_does_not_commit_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                background_window_ids=[102, 103],
+                visible_window_id=101,
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(103),
+                ],
+                fail_on_warp=True,
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "Failed to promote background window"):
+                SplitFromBackgroundPoolService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(client.actions, [("warp", 102, 101)])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_pending_split_failure_does_not_commit_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101)],
+                fail_on_insert=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowError,
+                "Failed to arm a pending east split",
+            ):
+                SplitFromBackgroundPoolService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(
+                client.actions,
+                [("insert", 101, DEFAULT_PENDING_SPLIT_DIRECTION)],
+            )
+            self.assertFalse(state_path.exists())
+
+
 class FakeYabaiClient:
     def __init__(
         self,
@@ -243,6 +436,8 @@ class FakeYabaiClient:
         mouse_follows_focus: str = "off",
         space_layout: str = "bsp",
         fail_on_layout: bool = False,
+        fail_on_warp: bool = False,
+        fail_on_insert: bool = False,
     ) -> None:
         self.focused_window = focused_window
         self.space_windows = space_windows
@@ -250,6 +445,8 @@ class FakeYabaiClient:
         self.mouse_follows_focus = mouse_follows_focus
         self.space_layout = space_layout
         self.fail_on_layout = fail_on_layout
+        self.fail_on_warp = fail_on_warp
+        self.fail_on_insert = fail_on_insert
         self.actions: list[tuple] = []
 
     def get_config(self, setting: str, *, space: Optional[int] = None) -> str:
@@ -291,8 +488,50 @@ class FakeYabaiClient:
     def stack_window(self, anchor_window_id: int, candidate_window_id: int) -> None:
         self.actions.append(("stack", anchor_window_id, candidate_window_id))
 
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        self.actions.append(("warp", window_id, target_window_id))
+        if self.fail_on_warp:
+            raise WorkflowError(
+                "Failed to promote background window "
+                f"{window_id} into a sibling tile beside window {target_window_id}"
+            )
+
+    def arm_window_split(self, window_id: int, direction: str) -> None:
+        self.actions.append(("insert", window_id, direction))
+        if self.fail_on_insert:
+            raise WorkflowError(
+                f"Failed to arm a pending {direction} split on window {window_id}"
+            )
+
     def focus_window(self, window_id: int) -> None:
         self.actions.append(("focus", window_id))
+
+
+def write_state_entry(
+    path: Path,
+    *,
+    background_window_ids: list[int],
+    visible_window_id: int,
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "spaces": {
+                    "1:2": {
+                        "display": 1,
+                        "space": 2,
+                        "visible_window_id": visible_window_id,
+                        "background_window_ids": background_window_ids,
+                    }
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def eligible_window(window_id: int, **overrides: object) -> dict:
