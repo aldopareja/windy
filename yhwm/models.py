@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List
+
+
+@dataclass(frozen=True)
+class EligibleWorkflowSpace:
+    display: int
+    space: int
+
+    @property
+    def storage_key(self) -> str:
+        return f"{self.display}:{self.space}"
+
+
+@dataclass(frozen=True)
+class CollapseResult:
+    workflow_space: EligibleWorkflowSpace
+    focused_window_id: int
+    background_window_ids: List[int]
+
+    def to_state_payload(self) -> Dict[str, object]:
+        return {
+            "display": self.workflow_space.display,
+            "space": self.workflow_space.space,
+            "visible_window_id": self.focused_window_id,
+            "background_window_ids": list(self.background_window_ids),
+        }
+
