@@ -207,7 +207,10 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 window_id=401,
             )
 
-            self.assertEqual(client.actions, [("stack", 101, 401), ("focus", 401)])
+            self.assertEqual(
+                client.actions,
+                [("stack", 101, 401), ("focus", 401), ("stack", 401, 301)],
+            )
             tracked = state_store.read().spaces["1:2"]
             self.assertEqual(tracked.leader_window_id, 401)
             self.assertEqual(tracked.background_window_ids, [301, 101])
@@ -250,6 +253,47 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
             self.assertEqual(tracked.leader_window_id, 101)
             self.assertEqual(tracked.background_window_ids, [301])
             self.assertIsNone(tracked.pending_split_direction)
+
+    def test_created_window_after_focus_race_reanchors_background_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: TrackedSpaceState(
+                            workflow_space=workflow_space,
+                            leader_window_id=401,
+                            background_window_ids=[301],
+                            pending_split_direction=None,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101),
+                    eligible_window(301),
+                    eligible_window(401, has_focus=True),
+                ],
+                focused_window_id=401,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
+                event="window_created",
+                window_id=401,
+            )
+
+            self.assertEqual(
+                client.actions,
+                [("stack", 101, 401), ("focus", 401), ("stack", 401, 301)],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.leader_window_id, 401)
+            self.assertEqual(tracked.background_window_ids, [301, 101])
 
     def test_window_moved_ignores_tracked_window_that_is_still_eligible_in_same_space(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

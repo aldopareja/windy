@@ -436,6 +436,8 @@ class WorkflowRuntime:
 
         self._yabai.stack_window(anchor_window_id, window_id)
         self._yabai.focus_window(window_id)
+        for background_window_id in background_window_ids:
+            self._yabai.stack_window(window_id, background_window_id)
 
         next_background = list(background_window_ids)
         if anchor_window_id != window_id and anchor_window_id not in next_background:
