@@ -14,7 +14,7 @@ from runtime.yhwm.window_created import WindowCreatedService
 
 
 class WindowCreatedServiceTests(unittest.TestCase):
-    def test_new_eligible_window_stacks_onto_focused_tile_and_keeps_background_pool(
+    def test_new_eligible_window_stacks_onto_focused_tile_and_persists_new_visible_window(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -42,13 +42,13 @@ class WindowCreatedServiceTests(unittest.TestCase):
             ).run()
 
             self.assertEqual(result.action, "stacked_on_focused_tile")
-            self.assertEqual(result.visible_window_id, 101)
+            self.assertEqual(result.visible_window_id, 104)
             self.assertEqual(result.background_window_ids, [102, 103])
             self.assertEqual(client.actions, [("stack", 101, 104)])
 
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [102, 103])
-            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 101)
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
             self.assertNotIn("pending_split_direction", payload["spaces"]["1:2"])
 
     def test_created_window_focus_uses_recent_focused_tile_as_stack_anchor_after_split(

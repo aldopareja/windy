@@ -88,10 +88,7 @@ class WindowCreatedService:
             eligible_window_ids=eligible_window_ids,
             excluded_window_ids=(self._window_id, anchor_window_id),
         )
-        visible_window_id = _resolve_visible_window_id(
-            created_window=created_window,
-            fallback_window_id=anchor_window_id,
-        )
+        visible_window_id = self._window_id
         prepared_state_payload = self._state_store.prepare_background_pool_payload(
             workflow_space=workflow_space,
             visible_window_id=visible_window_id,
@@ -179,12 +176,3 @@ def _refresh_background_window_ids(
         for window_id in persisted_background_window_ids
         if window_id in eligible_window_ids and window_id not in excluded_window_id_set
     ]
-
-
-def _resolve_visible_window_id(
-    *, created_window: Mapping[str, Any], fallback_window_id: int
-) -> int:
-    created_window_id = created_window.get("id")
-    if isinstance(created_window_id, int) and bool(created_window.get("has-focus", False)):
-        return created_window_id
-    return fallback_window_id
