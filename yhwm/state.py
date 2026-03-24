@@ -51,6 +51,26 @@ class WorkflowStateStore:
             pending_split_direction=validated_entry["pending_split_direction"],
         )
 
+    def read_all_space_states(self) -> List[WorkflowSpaceState]:
+        payload = self._load()
+        spaces = payload["spaces"]
+        all_space_states: List[WorkflowSpaceState] = []
+        for storage_key, entry in spaces.items():
+            workflow_space = self._parse_storage_key(storage_key)
+            validated_entry = self._validate_space_entry(
+                workflow_space=workflow_space,
+                raw_entry=entry,
+            )
+            all_space_states.append(
+                WorkflowSpaceState(
+                    workflow_space=workflow_space,
+                    visible_window_id=validated_entry["visible_window_id"],
+                    background_window_ids=list(validated_entry["background_window_ids"]),
+                    pending_split_direction=validated_entry["pending_split_direction"],
+                )
+            )
+        return all_space_states
+
     def read_background_window_ids(
         self, workflow_space: EligibleWorkflowSpace
     ) -> List[int]:
@@ -231,6 +251,41 @@ class WorkflowStateStore:
             "background_window_ids": normalized_background_window_ids,
             "pending_split_direction": normalized_pending_split_direction,
         }
+
+    def _parse_storage_key(self, storage_key: str) -> EligibleWorkflowSpace:
+        parts = storage_key.split(":")
+        if len(parts) != 2:
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space key '{storage_key}' must use '<display>:<space>' in {self._path}"
+            )
+
+        try:
+            display = int(parts[0])
+            space = int(parts[1])
+        except ValueError as exc:
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space key '{storage_key}' must use integer display and space values "
+                f"in {self._path}"
+            ) from exc
+
+        if display <= 0 or space <= 0:
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space key '{storage_key}' must use positive integer display and "
+                f"space values in {self._path}"
+            )
+
+        workflow_space = EligibleWorkflowSpace(display=display, space=space)
+        if workflow_space.storage_key != storage_key:
+            raise WorkflowError(
+                "Workflow state file has invalid schema: "
+                f"space key '{storage_key}' is not in canonical '<display>:<space>' form "
+                f"in {self._path}"
+            )
+
+        return workflow_space
 
     def _write(self, payload: Dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

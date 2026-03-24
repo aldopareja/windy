@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+
+def _bootstrap() -> None:
+    runtime_root = Path(__file__).resolve().parents[1]
+    runtime_root_str = str(runtime_root)
+    if runtime_root_str not in sys.path:
+        sys.path.insert(0, runtime_root_str)
+
+
+_bootstrap()
+
+from yhwm.cli import background_window_exit_cleanup_main
+
+
+if __name__ == "__main__":
+    raise SystemExit(background_window_exit_cleanup_main())

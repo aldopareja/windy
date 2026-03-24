@@ -6,6 +6,10 @@ from pathlib import Path
 import sys
 from typing import Callable, List, Optional
 
+from .background_window_exit_cleanup import (
+    BackgroundWindowExitCleanupService,
+    SUPPORTED_BACKGROUND_WINDOW_EXIT_EVENTS,
+)
 from .collapse import CollapseCurrentSpaceService
 from .errors import WorkflowError
 from .state import WorkflowStateStore
@@ -129,6 +133,62 @@ def window_focused_main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def background_window_exit_cleanup_main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser(
+        prog="background_window_exit_cleanup",
+        description=(
+            "Handle one supported yabai lifecycle signal for tracked background "
+            "workflow windows, removing the window from a matched background pool "
+            "when it has been destroyed or leaves workflow eligibility."
+        ),
+    )
+    parser.add_argument(
+        "--window-id",
+        default=os.environ.get("YABAI_WINDOW_ID"),
+        help="Signaled yabai window id. Defaults to the YABAI_WINDOW_ID environment variable.",
+    )
+    parser.add_argument(
+        "--event",
+        help=(
+            "Required yabai signal event name. Supported values: "
+            + ", ".join(sorted(SUPPORTED_BACKGROUND_WINDOW_EXIT_EVENTS))
+            + "."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        window_id = _parse_signal_window_id(
+            command_name="background_window_exit_cleanup",
+            raw_value=args.window_id,
+        )
+        event = _parse_signal_event(
+            command_name="background_window_exit_cleanup",
+            raw_value=args.event,
+            supported_values=SUPPORTED_BACKGROUND_WINDOW_EXIT_EVENTS,
+        )
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    state_store = WorkflowStateStore(Path(args.state_file))
+    yabai = SubprocessYabaiClient(args.yabai_bin)
+    service = BackgroundWindowExitCleanupService(
+        yabai=yabai,
+        state_store=state_store,
+        window_id=window_id,
+        event=event,
+    )
+
+    try:
+        service.run()
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
 def _run_service_command(
     *,
     argv: Optional[List[str]],
@@ -195,3 +255,24 @@ def _parse_signal_window_id(*, command_name: str, raw_value: Optional[str]) -> i
         )
 
     return window_id
+
+
+def _parse_signal_event(
+    *,
+    command_name: str,
+    raw_value: Optional[str],
+    supported_values: set[str] | frozenset[str],
+) -> str:
+    if raw_value is None:
+        raise WorkflowError(f"{command_name} requires a supported event via --event.")
+
+    candidate = raw_value.strip().lower()
+    if not candidate:
+        raise WorkflowError(f"{command_name} requires a supported event via --event.")
+
+    if candidate not in supported_values:
+        raise WorkflowError(
+            f"{command_name} received an unsupported event: {raw_value!r}"
+        )
+
+    return candidate
