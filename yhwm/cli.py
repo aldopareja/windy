@@ -10,6 +10,10 @@ from .background_window_exit_cleanup import (
     BackgroundWindowExitCleanupService,
     SUPPORTED_BACKGROUND_WINDOW_EXIT_EVENTS,
 )
+from .background_window_return_as_new import (
+    BackgroundWindowReturnAsNewService,
+    SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS,
+)
 from .collapse import CollapseCurrentSpaceService
 from .errors import WorkflowError
 from .state import WorkflowStateStore
@@ -174,6 +178,63 @@ def background_window_exit_cleanup_main(argv: Optional[List[str]] = None) -> int
     state_store = WorkflowStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
     service = BackgroundWindowExitCleanupService(
+        yabai=yabai,
+        state_store=state_store,
+        window_id=window_id,
+        event=event,
+    )
+
+    try:
+        service.run()
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def background_window_return_as_new_main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser(
+        prog="background_window_return_as_new",
+        description=(
+            "Handle one supported yabai lifecycle signal for a formerly removed "
+            "background workflow window that has become eligible again, reusing "
+            "the tracked new-window placement path when its current workflow "
+            "space is already persisted."
+        ),
+    )
+    parser.add_argument(
+        "--window-id",
+        default=os.environ.get("YABAI_WINDOW_ID"),
+        help="Signaled yabai window id. Defaults to the YABAI_WINDOW_ID environment variable.",
+    )
+    parser.add_argument(
+        "--event",
+        help=(
+            "Required yabai signal event name. Supported values: "
+            + ", ".join(sorted(SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS))
+            + "."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        window_id = _parse_signal_window_id(
+            command_name="background_window_return_as_new",
+            raw_value=args.window_id,
+        )
+        event = _parse_signal_event(
+            command_name="background_window_return_as_new",
+            raw_value=args.event,
+            supported_values=SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS,
+        )
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    state_store = WorkflowStateStore(Path(args.state_file))
+    yabai = SubprocessYabaiClient(args.yabai_bin)
+    service = BackgroundWindowReturnAsNewService(
         yabai=yabai,
         state_store=state_store,
         window_id=window_id,
