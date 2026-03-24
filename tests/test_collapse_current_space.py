@@ -193,6 +193,45 @@ class CollapseCurrentSpaceTests(unittest.TestCase):
                 "{ invalid json\n",
             )
 
+    def test_schema_invalid_list_state_blocks_mutation_before_collapse_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            state_path.write_text("[]\n", encoding="utf-8")
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101), eligible_window(102)],
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "invalid schema"):
+                CollapseCurrentSpaceService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), "[]\n")
+
+    def test_schema_invalid_spaces_array_blocks_mutation_before_collapse_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            state_path.write_text('{"spaces":[]}\n', encoding="utf-8")
+            client = FakeYabaiClient(
+                focused_window=eligible_window(101),
+                space_windows=[eligible_window(101), eligible_window(102)],
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "invalid schema"):
+                CollapseCurrentSpaceService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(
+                state_path.read_text(encoding="utf-8"),
+                '{"spaces":[]}\n',
+            )
+
 
 class FakeYabaiClient:
     def __init__(
