@@ -105,6 +105,15 @@ class WorkflowStateStore:
     def write_payload(self, payload: Dict[str, Any]) -> None:
         self._write(payload)
 
+    def prepare_space_deletion_payload(
+        self, workflow_space: EligibleWorkflowSpace
+    ) -> Dict[str, Any]:
+        payload = self._load()
+        spaces = payload.setdefault("spaces", {})
+        spaces.pop(workflow_space.storage_key, None)
+        payload["schema_version"] = 1
+        return payload
+
     def _load(self) -> Dict[str, Any]:
         if not self._path.exists():
             return {"schema_version": 1, "spaces": {}}

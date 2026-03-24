@@ -85,3 +85,14 @@ class BackgroundWindowReturnAsNewResult:
     visible_window_id: Optional[int]
     background_window_ids: List[int]
     pending_split_direction: Optional[str]
+
+
+@dataclass(frozen=True)
+class TrackedVisibleWindowExitRecoveryResult:
+    window_id: int
+    event: str
+    workflow_space: Optional[EligibleWorkflowSpace]
+    action: str
+    visible_window_id: Optional[int]
+    background_window_ids: List[int]
+    pending_split_direction: Optional[str]

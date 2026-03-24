@@ -18,6 +18,10 @@ from .collapse import CollapseCurrentSpaceService
 from .errors import WorkflowError
 from .state import WorkflowStateStore
 from .split import SplitFromBackgroundPoolService
+from .tracked_visible_window_exit_recovery import (
+    SUPPORTED_TRACKED_VISIBLE_WINDOW_EXIT_EVENTS,
+    TrackedVisibleWindowExitRecoveryService,
+)
 from .window_created import WindowCreatedService
 from .window_focused import WindowFocusedService
 from .yabai import SubprocessYabaiClient
@@ -235,6 +239,65 @@ def background_window_return_as_new_main(argv: Optional[List[str]] = None) -> in
     state_store = WorkflowStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
     service = BackgroundWindowReturnAsNewService(
+        yabai=yabai,
+        state_store=state_store,
+        window_id=window_id,
+        event=event,
+    )
+
+    try:
+        service.run()
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def tracked_visible_window_exit_recovery_main(
+    argv: Optional[List[str]] = None,
+) -> int:
+    parser = _build_parser(
+        prog="tracked_visible_window_exit_recovery",
+        description=(
+            "Handle one supported yabai lifecycle signal for a tracked visible "
+            "workflow window, either recovering with one tracked eligible "
+            "background window from the same workflow space or retargeting state "
+            "to the remaining visible eligible windows after native collapse."
+        ),
+    )
+    parser.add_argument(
+        "--window-id",
+        default=os.environ.get("YABAI_WINDOW_ID"),
+        help="Signaled yabai window id. Defaults to the YABAI_WINDOW_ID environment variable.",
+    )
+    parser.add_argument(
+        "--event",
+        help=(
+            "Required yabai signal event name. Supported values: "
+            + ", ".join(sorted(SUPPORTED_TRACKED_VISIBLE_WINDOW_EXIT_EVENTS))
+            + "."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        window_id = _parse_signal_window_id(
+            command_name="tracked_visible_window_exit_recovery",
+            raw_value=args.window_id,
+        )
+        event = _parse_signal_event(
+            command_name="tracked_visible_window_exit_recovery",
+            raw_value=args.event,
+            supported_values=SUPPORTED_TRACKED_VISIBLE_WINDOW_EXIT_EVENTS,
+        )
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    state_store = WorkflowStateStore(Path(args.state_file))
+    yabai = SubprocessYabaiClient(args.yabai_bin)
+    service = TrackedVisibleWindowExitRecoveryService(
         yabai=yabai,
         state_store=state_store,
         window_id=window_id,
