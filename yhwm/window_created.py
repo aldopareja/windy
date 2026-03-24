@@ -85,6 +85,8 @@ class WindowCreatedService:
                 workflow_space=workflow_space,
                 created_window_id=self._window_id,
                 eligible_windows=eligible_windows,
+                preferred_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=persisted_space_state.background_window_ids,
             )
             refreshed_background_window_ids = _refresh_background_window_ids(
                 persisted_background_window_ids=persisted_space_state.background_window_ids,
@@ -129,7 +131,10 @@ def _resolve_anchor_window_id(
     workflow_space: EligibleWorkflowSpace,
     created_window_id: int,
     eligible_windows: Iterable[Mapping[str, Any]],
+    preferred_window_id: int | None = None,
+    background_window_ids: Iterable[int] = (),
 ) -> int:
+    eligible_window_id_set = {int(window["id"]) for window in eligible_windows}
     focused_window_ids = [
         int(window["id"])
         for window in eligible_windows
@@ -143,36 +148,48 @@ def _resolve_anchor_window_id(
     if focused_window_ids:
         return focused_window_ids[0]
 
-    recent_window = query_recent_window_record(
-        yabai,
-        description="most recently focused window",
+    background_window_id_set = set(background_window_ids)
+    preferred_anchor_is_valid = (
+        preferred_window_id is not None
+        and preferred_window_id != created_window_id
+        and preferred_window_id in eligible_window_id_set
+        and preferred_window_id not in background_window_id_set
     )
-    recent_window_id = int(recent_window["id"])
-    if recent_window_id == created_window_id:
-        raise WorkflowError(
-            "Failed to identify a previously focused visible eligible workflow window "
-            "before the created window took focus."
-        )
-    recent_window_workflow_space = derive_workflow_space_from_window(
-        recent_window,
-        description="most recently focused window",
-    )
-    if recent_window_workflow_space != workflow_space:
-        raise WorkflowError(
-            "The most recently focused window does not belong to the created window's "
-            "eligible workflow space."
-        )
-    if not is_eligible_window(
-        recent_window,
-        target_display=workflow_space.display,
-        target_space=workflow_space.space,
-    ):
-        raise WorkflowError(
-            "The most recently focused window is not an eligible workflow window in the "
-            "created window's workflow space."
-        )
 
-    return recent_window_id
+    try:
+        recent_window = query_recent_window_record(
+            yabai,
+            description="most recently focused window",
+        )
+        recent_window_id = int(recent_window["id"])
+        if recent_window_id == created_window_id:
+            raise WorkflowError(
+                "Failed to identify a previously focused visible eligible workflow window "
+                "before the created window took focus."
+            )
+        recent_window_workflow_space = derive_workflow_space_from_window(
+            recent_window,
+            description="most recently focused window",
+        )
+        if recent_window_workflow_space != workflow_space:
+            raise WorkflowError(
+                "The most recently focused window does not belong to the created window's "
+                "eligible workflow space."
+            )
+        if not is_eligible_window(
+            recent_window,
+            target_display=workflow_space.display,
+            target_space=workflow_space.space,
+        ):
+            raise WorkflowError(
+                "The most recently focused window is not an eligible workflow window in the "
+                "created window's workflow space."
+            )
+        return recent_window_id
+    except WorkflowError:
+        if preferred_anchor_is_valid:
+            return preferred_window_id
+        raise
 
 
 def _refresh_background_window_ids(

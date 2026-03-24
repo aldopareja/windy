@@ -11,6 +11,7 @@ from .errors import WorkflowError
 from .state import WorkflowStateStore
 from .split import SplitFromBackgroundPoolService
 from .window_created import WindowCreatedService
+from .window_focused import WindowFocusedService
 from .yabai import SubprocessYabaiClient
 
 
@@ -61,7 +62,10 @@ def window_created_main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        window_id = _parse_window_id(args.window_id)
+        window_id = _parse_signal_window_id(
+            command_name="window_created",
+            raw_value=args.window_id,
+        )
     except WorkflowError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -69,6 +73,48 @@ def window_created_main(argv: Optional[List[str]] = None) -> int:
     state_store = WorkflowStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
     service = WindowCreatedService(
+        yabai=yabai,
+        state_store=state_store,
+        window_id=window_id,
+    )
+
+    try:
+        service.run()
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def window_focused_main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser(
+        prog="window_focused",
+        description=(
+            "Handle one yabai window_focused signal for tracked workflow spaces, "
+            "updating only the tracked focused visible tile when the focused "
+            "window is a visible eligible workflow window."
+        ),
+    )
+    parser.add_argument(
+        "--window-id",
+        default=os.environ.get("YABAI_WINDOW_ID"),
+        help="Focused yabai window id. Defaults to the YABAI_WINDOW_ID environment variable.",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        window_id = _parse_signal_window_id(
+            command_name="window_focused",
+            raw_value=args.window_id,
+        )
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    state_store = WorkflowStateStore(Path(args.state_file))
+    yabai = SubprocessYabaiClient(args.yabai_bin)
+    service = WindowFocusedService(
         yabai=yabai,
         state_store=state_store,
         window_id=window_id,
@@ -124,28 +170,28 @@ def _build_parser(*, prog: str, description: str) -> argparse.ArgumentParser:
     return parser
 
 
-def _parse_window_id(raw_value: Optional[str]) -> int:
+def _parse_signal_window_id(*, command_name: str, raw_value: Optional[str]) -> int:
     if raw_value is None:
         raise WorkflowError(
-            "window_created requires a usable window id via --window-id or YABAI_WINDOW_ID."
+            f"{command_name} requires a usable window id via --window-id or YABAI_WINDOW_ID."
         )
 
     candidate = raw_value.strip()
     if not candidate:
         raise WorkflowError(
-            "window_created requires a usable window id via --window-id or YABAI_WINDOW_ID."
+            f"{command_name} requires a usable window id via --window-id or YABAI_WINDOW_ID."
         )
 
     try:
         window_id = int(candidate)
     except ValueError as exc:
         raise WorkflowError(
-            f"window_created received an invalid window id: {raw_value!r}"
+            f"{command_name} received an invalid window id: {raw_value!r}"
         ) from exc
 
     if window_id <= 0:
         raise WorkflowError(
-            f"window_created received an invalid window id: {raw_value!r}"
+            f"{command_name} received an invalid window id: {raw_value!r}"
         )
 
     return window_id

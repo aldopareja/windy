@@ -7,10 +7,294 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from runtime.yhwm.cli import window_created_main
+from runtime.yhwm.cli import window_created_main, window_focused_main
 from runtime.yhwm.errors import WorkflowError
 from runtime.yhwm.state import WorkflowStateStore
 from runtime.yhwm.window_created import WindowCreatedService
+from runtime.yhwm.window_focused import WindowFocusedService
+
+
+class WindowFocusedServiceTests(unittest.TestCase):
+    def test_visible_eligible_focus_updates_tracked_visible_tile_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103, 104],
+                pending_split_direction="east",
+            )
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                    104: eligible_window(104),
+                },
+                space_windows={2: [101, 102, 103, 104]},
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=102,
+            ).run()
+
+            self.assertEqual(result.action, "updated_focused_visible_tile")
+            self.assertEqual(result.visible_window_id, 102)
+            self.assertEqual(result.background_window_ids, [103, 104])
+            self.assertEqual(result.pending_split_direction, "east")
+            self.assertEqual(client.actions, [])
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 102)
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103, 104])
+            self.assertEqual(payload["spaces"]["1:2"]["pending_split_direction"], "east")
+
+    def test_background_window_focus_is_ignored_without_state_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[102, 103],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                },
+                space_windows={2: [101, 102, 103]},
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=102,
+            ).run()
+
+            self.assertEqual(result.action, "ignored_background_window")
+            self.assertEqual(result.visible_window_id, 101)
+            self.assertEqual(result.background_window_ids, [102, 103])
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_untracked_space_is_left_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[102],
+            )
+            original_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=201,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102),
+                    201: eligible_window(201, display=2, space=5, **{"has-focus": True}),
+                },
+                space_windows={
+                    2: [101, 102],
+                    5: [201],
+                },
+                display_spaces={
+                    1: [2],
+                    2: [5],
+                },
+                space_displays={
+                    2: 1,
+                    5: 2,
+                },
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=201,
+            ).run()
+
+            self.assertEqual(result.action, "ignored_untracked_space")
+            self.assertEqual(client.actions, [])
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8")),
+                original_payload,
+            )
+
+    def test_ineligible_focused_window_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[102],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=104,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102),
+                    104: eligible_window(104, **{"is-floating": True, "has-focus": True}),
+                },
+                space_windows={2: [101, 102, 104]},
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=104,
+            ).run()
+
+            self.assertEqual(result.action, "ignored_ineligible")
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_invalid_state_blocks_mutation_before_focus_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            state_path.write_text(
+                '{"schema_version":1,"spaces":{"1:2":{"display":1,"space":2,"visible_window_id":101,"background_window_ids":[102],"pending_split_direction":[]}}}\n',
+                encoding="utf-8",
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=101,
+                window_records={
+                    101: eligible_window(101, **{"has-focus": True}),
+                    102: eligible_window(102),
+                },
+                space_windows={2: [101, 102]},
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "invalid schema"):
+                WindowFocusedService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=101,
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_focus_update_requires_focused_window_in_current_eligible_window_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                },
+                space_windows={2: [101, 103]},
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowError,
+                "Focused eligible window is missing",
+            ):
+                WindowFocusedService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=102,
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_focus_update_requires_bsp_layout_for_tracked_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                },
+                space_windows={2: [101, 102, 103]},
+                space_layouts={2: "stack"},
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "must use layout 'bsp'"):
+                WindowFocusedService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=102,
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_window_created_uses_refreshed_visible_tile_after_focus_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            focus_client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                },
+                space_windows={2: [101, 102, 103]},
+            )
+
+            focus_result = WindowFocusedService(
+                yabai=focus_client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=102,
+            ).run()
+
+            self.assertEqual(focus_result.action, "updated_focused_visible_tile")
+
+            create_client = FakeWindowCreatedYabaiClient(
+                focused_window_id=104,
+                recent_window_id=101,
+                fail_on_recent_query=True,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102),
+                    103: eligible_window(103),
+                    104: eligible_window(104, **{"has-focus": True}),
+                },
+                space_windows={2: [101, 102, 103, 104]},
+            )
+
+            create_result = WindowCreatedService(
+                yabai=create_client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=104,
+            ).run()
+
+            self.assertEqual(create_result.action, "stacked_on_focused_tile")
+            self.assertEqual(create_client.actions, [("stack", 102, 104)])
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
 
 
 class WindowCreatedServiceTests(unittest.TestCase):
@@ -129,7 +413,7 @@ class WindowCreatedServiceTests(unittest.TestCase):
             state_path = Path(tempdir) / "workflow_state.json"
             write_state_entry(
                 state_path,
-                visible_window_id=101,
+                visible_window_id=999,
                 background_window_ids=[],
             )
             original_state = state_path.read_text(encoding="utf-8")
@@ -294,6 +578,24 @@ class WindowCreatedCliTests(unittest.TestCase):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             exit_code = window_created_main(
+                [
+                    "--window-id",
+                    "",
+                    "--state-file",
+                    "/tmp/unused-state.json",
+                    "--yabai-bin",
+                    "/usr/bin/false",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+
+
+class WindowFocusedCliTests(unittest.TestCase):
+    def test_missing_window_id_returns_failure(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = window_focused_main(
                 [
                     "--window-id",
                     "",
