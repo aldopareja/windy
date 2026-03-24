@@ -30,6 +30,15 @@ def query_window_record(
     return {**window, "id": record_window_id}
 
 
+def query_recent_window_record(yabai: YabaiClient, *, description: str) -> Dict[str, Any]:
+    window = _require_mapping(
+        yabai.query_recent_window(),
+        f"{description} query",
+    )
+    record_window_id = _require_int(window, "id", description)
+    return {**window, "id": record_window_id}
+
+
 def derive_workflow_space_from_window(
     window: Mapping[str, Any], *, description: str
 ) -> EligibleWorkflowSpace:

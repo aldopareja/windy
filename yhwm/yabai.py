@@ -17,6 +17,9 @@ class YabaiClient(Protocol):
     def query_window(self, window_id: int) -> Any:
         ...
 
+    def query_recent_window(self) -> Any:
+        ...
+
     def query_display(self, display: int) -> Any:
         ...
 
@@ -69,6 +72,13 @@ class SubprocessYabaiClient:
             error_context=f"Failed to query window {window_id} from yabai",
         )
         return _expect_single_entity(payload, f"window {window_id}")
+
+    def query_recent_window(self) -> Any:
+        payload = self._run_json(
+            ["-m", "query", "--windows", "--window", "recent"],
+            error_context="Failed to query the most recently focused window from yabai",
+        )
+        return _expect_single_entity(payload, "most recently focused window")
 
     def query_display(self, display: int) -> Any:
         payload = self._run_json(

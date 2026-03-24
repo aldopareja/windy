@@ -51,7 +51,7 @@ class WindowCreatedServiceTests(unittest.TestCase):
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 101)
             self.assertNotIn("pending_split_direction", payload["spaces"]["1:2"])
 
-    def test_created_window_focus_uses_persisted_visible_window_as_stack_anchor(
+    def test_created_window_focus_uses_recent_focused_tile_as_stack_anchor_after_split(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -59,10 +59,11 @@ class WindowCreatedServiceTests(unittest.TestCase):
             write_state_entry(
                 state_path,
                 visible_window_id=101,
-                background_window_ids=[102],
+                background_window_ids=[],
             )
             client = FakeWindowCreatedYabaiClient(
                 focused_window_id=104,
+                recent_window_id=102,
                 window_records={
                     101: eligible_window(101),
                     102: eligible_window(102),
@@ -79,11 +80,11 @@ class WindowCreatedServiceTests(unittest.TestCase):
 
             self.assertEqual(result.action, "stacked_on_focused_tile")
             self.assertEqual(result.visible_window_id, 104)
-            self.assertEqual(client.actions, [("stack", 101, 104)])
+            self.assertEqual(client.actions, [("stack", 102, 104)])
 
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
-            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [102])
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [])
 
     def test_pending_split_is_consumed_and_cleared_without_extra_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -96,6 +97,7 @@ class WindowCreatedServiceTests(unittest.TestCase):
             )
             client = FakeWindowCreatedYabaiClient(
                 focused_window_id=104,
+                recent_window_id=101,
                 window_records={
                     101: eligible_window(101),
                     102: eligible_window(102),
@@ -119,6 +121,39 @@ class WindowCreatedServiceTests(unittest.TestCase):
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [102, 103])
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
             self.assertNotIn("pending_split_direction", payload["spaces"]["1:2"])
+
+    def test_created_window_focus_requires_recent_window_query_to_resolve_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=104,
+                fail_on_recent_query=True,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102),
+                    104: eligible_window(104, **{"has-focus": True}),
+                },
+                space_windows={2: [101, 102, 104]},
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowError,
+                "most recently focused window",
+            ):
+                WindowCreatedService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=104,
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
 
     def test_ineligible_created_window_preserves_pending_split_state(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -277,14 +312,17 @@ class FakeWindowCreatedYabaiClient:
         focused_window_id: int,
         window_records: dict[int, dict],
         space_windows: dict[int, list[int]],
+        recent_window_id: int | None = None,
         display_spaces: dict[int, list[int]] | None = None,
         space_displays: dict[int, int] | None = None,
         focus_follows_mouse: str = "off",
         mouse_follows_focus: str = "off",
         space_layouts: dict[int, str] | None = None,
         fail_on_stack: bool = False,
+        fail_on_recent_query: bool = False,
     ) -> None:
         self.focused_window_id = focused_window_id
+        self.recent_window_id = recent_window_id
         self.window_records = {
             window_id: dict(record) for window_id, record in window_records.items()
         }
@@ -299,6 +337,7 @@ class FakeWindowCreatedYabaiClient:
         self.mouse_follows_focus = mouse_follows_focus
         self.space_layouts = space_layouts or {}
         self.fail_on_stack = fail_on_stack
+        self.fail_on_recent_query = fail_on_recent_query
         self.actions: list[tuple] = []
 
     def get_config(self, setting: str, *, space: int | None = None) -> str:
@@ -317,6 +356,11 @@ class FakeWindowCreatedYabaiClient:
 
     def query_window(self, window_id: int) -> dict:
         return dict(self.window_records[window_id])
+
+    def query_recent_window(self) -> dict:
+        if self.fail_on_recent_query or self.recent_window_id is None:
+            raise WorkflowError("Failed to query the most recently focused window from yabai")
+        return dict(self.window_records[self.recent_window_id])
 
     def query_display(self, display: int) -> dict:
         return {
