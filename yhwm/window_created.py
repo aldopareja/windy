@@ -77,29 +77,40 @@ class WindowCreatedService:
                 "workflow window query for its workflow space."
             )
 
-        anchor_window_id = _resolve_anchor_window_id(
-            yabai=self._yabai,
-            workflow_space=workflow_space,
-            created_window_id=self._window_id,
-            eligible_windows=eligible_windows,
-        )
-        refreshed_background_window_ids = _refresh_background_window_ids(
-            persisted_background_window_ids=persisted_space_state.background_window_ids,
-            eligible_window_ids=eligible_window_ids,
-            excluded_window_ids=(self._window_id, anchor_window_id),
-        )
         visible_window_id = self._window_id
-        prepared_state_payload = self._state_store.prepare_background_pool_payload(
-            workflow_space=workflow_space,
-            visible_window_id=visible_window_id,
-            background_window_ids=refreshed_background_window_ids,
-            pending_split_direction=None,
-        )
 
         if persisted_space_state.pending_split_direction is None:
+            anchor_window_id = _resolve_anchor_window_id(
+                yabai=self._yabai,
+                workflow_space=workflow_space,
+                created_window_id=self._window_id,
+                eligible_windows=eligible_windows,
+            )
+            refreshed_background_window_ids = _refresh_background_window_ids(
+                persisted_background_window_ids=persisted_space_state.background_window_ids,
+                eligible_window_ids=eligible_window_ids,
+                excluded_window_ids=(self._window_id, anchor_window_id),
+            )
+            prepared_state_payload = self._state_store.prepare_background_pool_payload(
+                workflow_space=workflow_space,
+                visible_window_id=visible_window_id,
+                background_window_ids=refreshed_background_window_ids,
+                pending_split_direction=None,
+            )
             self._yabai.stack_window(anchor_window_id, self._window_id)
             action = "stacked_on_focused_tile"
         else:
+            refreshed_background_window_ids = _refresh_background_window_ids(
+                persisted_background_window_ids=persisted_space_state.background_window_ids,
+                eligible_window_ids=eligible_window_ids,
+                excluded_window_ids=(self._window_id,),
+            )
+            prepared_state_payload = self._state_store.prepare_background_pool_payload(
+                workflow_space=workflow_space,
+                visible_window_id=visible_window_id,
+                background_window_ids=refreshed_background_window_ids,
+                pending_split_direction=None,
+            )
             action = "consumed_pending_split"
 
         self._state_store.write_payload(prepared_state_payload)

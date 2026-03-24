@@ -86,7 +86,9 @@ class WindowCreatedServiceTests(unittest.TestCase):
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [])
 
-    def test_pending_split_is_consumed_and_cleared_without_extra_mutation(self) -> None:
+    def test_pending_split_is_consumed_and_cleared_without_recent_window_dependency(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_path = Path(tempdir) / "workflow_state.json"
             write_state_entry(
@@ -97,7 +99,7 @@ class WindowCreatedServiceTests(unittest.TestCase):
             )
             client = FakeWindowCreatedYabaiClient(
                 focused_window_id=104,
-                recent_window_id=101,
+                fail_on_recent_query=True,
                 window_records={
                     101: eligible_window(101),
                     102: eligible_window(102),
