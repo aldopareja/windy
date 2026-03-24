@@ -282,6 +282,57 @@ class AltTabSessionCancelServiceTests(unittest.TestCase):
             self.assertEqual(result.action, "ignored_no_armed_session")
             self.assertFalse(result.session_active)
 
+    def test_thumbnail_click_cancel_suppresses_next_same_space_focus_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            session_path = Path(tempdir) / "alttab_session.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            session_store = AltTabSessionStore(session_path)
+            session_store.arm_session(
+                ArmedAltTabSession(
+                    origin_window_id=101,
+                    origin_workflow_space=workflow_space(1, 2),
+                )
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+
+            cancel_result = AltTabSessionCancelService(
+                session_store=session_store,
+                reason="thumbnail_click",
+            ).run()
+
+            self.assertEqual(cancel_result.action, "canceled_session")
+            self.assertFalse(cancel_result.session_active)
+            self.assertIsNone(session_store.read_session())
+            self.assertIsNotNone(session_store.read_focus_guard())
+
+            client = FakeAltTabYabaiClient(
+                focused_window_id=201,
+                window_records={
+                    101: eligible_window(101),
+                    103: eligible_window(103),
+                    201: eligible_window(201, **{"has-focus": True}),
+                },
+                space_windows={
+                    2: [101, 103, 201],
+                },
+            )
+
+            focus_result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                alttab_session_store=session_store,
+                window_id=201,
+            ).run()
+
+            self.assertEqual(focus_result.action, "ignored_recent_alttab_cancel")
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+            self.assertIsNone(session_store.read_focus_guard())
+
 
 class AltTabSelectedWindowServiceTests(unittest.TestCase):
     def test_other_space_selection_cancels_session_without_mutating_state(self) -> None:

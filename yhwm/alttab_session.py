@@ -8,6 +8,7 @@ from .current_space import (
 )
 from .eligibility import is_eligible_window
 from .models import (
+    AltTabFocusGuard,
     AltTabSessionArmResult,
     AltTabSessionCancelResult,
     ArmedAltTabSession,
@@ -121,9 +122,11 @@ class AltTabSessionCancelService:
         *,
         session_store: AltTabSessionStore,
         reason: str,
+        selected_window_id: int | None = None,
     ):
         self._session_store = session_store
         self._reason = reason
+        self._selected_window_id = selected_window_id
 
     def run(self) -> AltTabSessionCancelResult:
         armed_session = self._session_store.read_session()
@@ -137,11 +140,17 @@ class AltTabSessionCancelService:
                 session_active=False,
             )
 
-        self._session_store.clear_session()
+        focus_guard = None
+        if self._reason == "thumbnail_click":
+            focus_guard = AltTabFocusGuard(
+                workflow_space=armed_session.origin_workflow_space,
+                target_window_id=self._selected_window_id,
+            )
+        self._session_store.disarm_session(focus_guard=focus_guard)
         return AltTabSessionCancelResult(
             workflow_space=armed_session.origin_workflow_space,
             origin_window_id=armed_session.origin_window_id,
-            selected_window_id=None,
+            selected_window_id=self._selected_window_id,
             reason=self._reason,
             action="canceled_session",
             session_active=False,
@@ -182,7 +191,7 @@ class AltTabSelectedWindowService:
             description=f"selected window {self._selected_window_id}",
         )
         if selected_workflow_space != armed_session.origin_workflow_space:
-            self._session_store.clear_session()
+            self._session_store.disarm_session()
             return AltTabSessionCancelResult(
                 workflow_space=armed_session.origin_workflow_space,
                 origin_window_id=armed_session.origin_window_id,

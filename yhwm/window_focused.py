@@ -40,6 +40,30 @@ class WindowFocusedService:
                     background_window_ids=[],
                     pending_split_direction=None,
                 )
+            focus_guard = self._alttab_session_store.read_focus_guard()
+            if focus_guard is not None:
+                focused_window = query_window_record(
+                    self._yabai,
+                    window_id=self._window_id,
+                    description=f"focused window {self._window_id}",
+                )
+                workflow_space = derive_workflow_space_from_window(
+                    focused_window,
+                    description=f"focused window {self._window_id}",
+                )
+                self._alttab_session_store.clear_focus_guard()
+                if workflow_space == focus_guard.workflow_space and (
+                    focus_guard.target_window_id is None
+                    or focus_guard.target_window_id == self._window_id
+                ):
+                    return WindowFocusedResult(
+                        focused_window_id=self._window_id,
+                        workflow_space=workflow_space,
+                        action="ignored_recent_alttab_cancel",
+                        visible_window_id=None,
+                        background_window_ids=[],
+                        pending_split_direction=None,
+                    )
 
         focused_window = query_window_record(
             self._yabai,

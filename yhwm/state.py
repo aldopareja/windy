@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from .errors import WorkflowError
 from .models import (
+    AltTabFocusGuard,
     ArmedAltTabSession,
     CollapseResult,
     EligibleWorkflowSpace,
@@ -331,8 +332,22 @@ class AltTabSessionStore:
         return runtime_root / "state" / "alttab_session.json"
 
     def read_session(self) -> Optional[ArmedAltTabSession]:
-        payload = self._load()
-        raw_session = payload["session"]
+        return self._parse_session(self._load()["session"])
+
+    def read_focus_guard(self) -> Optional[AltTabFocusGuard]:
+        return self._parse_focus_guard(self._load()["focus_guard"])
+
+    def arm_session(self, session: ArmedAltTabSession) -> None:
+        self._write_state(session=session, focus_guard=None)
+
+    def disarm_session(self, *, focus_guard: AltTabFocusGuard | None = None) -> None:
+        self._write_state(session=None, focus_guard=focus_guard)
+
+    def clear_focus_guard(self) -> None:
+        current_session = self.read_session()
+        self._write_state(session=current_session, focus_guard=None)
+
+    def _parse_session(self, raw_session: Any) -> Optional[ArmedAltTabSession]:
         if raw_session is None:
             return None
 
@@ -371,29 +386,46 @@ class AltTabSessionStore:
             ),
         )
 
-    def arm_session(self, session: ArmedAltTabSession) -> None:
-        payload = {
-            "schema_version": 1,
-            "session": {
-                "origin_window_id": session.origin_window_id,
-                "origin_display": session.origin_workflow_space.display,
-                "origin_space": session.origin_workflow_space.space,
-                "updated_at": _utc_now(),
-            },
-        }
-        self._write(payload)
+    def _parse_focus_guard(self, raw_focus_guard: Any) -> Optional[AltTabFocusGuard]:
+        if raw_focus_guard is None:
+            return None
 
-    def clear_session(self) -> None:
-        self._write(
-            {
-                "schema_version": 1,
-                "session": None,
-            }
+        if not isinstance(raw_focus_guard, dict):
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'focus_guard' must be an object or null in {self._path}"
+            )
+
+        display = raw_focus_guard.get("display")
+        if not isinstance(display, int) or display <= 0:
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'focus_guard.display' must be a positive integer in {self._path}"
+            )
+
+        space = raw_focus_guard.get("space")
+        if not isinstance(space, int) or space <= 0:
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'focus_guard.space' must be a positive integer in {self._path}"
+            )
+
+        target_window_id = raw_focus_guard.get("target_window_id")
+        if target_window_id is not None:
+            if not isinstance(target_window_id, int) or target_window_id <= 0:
+                raise WorkflowError(
+                    "AltTab session file has invalid schema: "
+                    f"'focus_guard.target_window_id' must be a positive integer when present in {self._path}"
+                )
+
+        return AltTabFocusGuard(
+            workflow_space=EligibleWorkflowSpace(display=display, space=space),
+            target_window_id=target_window_id,
         )
 
     def _load(self) -> Dict[str, Any]:
         if not self._path.exists():
-            return {"schema_version": 1, "session": None}
+            return {"schema_version": 1, "session": None, "focus_guard": None}
 
         try:
             raw_text = self._path.read_text(encoding="utf-8")
@@ -427,9 +459,38 @@ class AltTabSessionStore:
 
         if "session" not in normalized_payload:
             normalized_payload["session"] = None
+        if "focus_guard" not in normalized_payload:
+            normalized_payload["focus_guard"] = None
         return normalized_payload
 
-    def _write(self, payload: Dict[str, Any]) -> None:
+    def _write_state(
+        self,
+        *,
+        session: ArmedAltTabSession | None,
+        focus_guard: AltTabFocusGuard | None,
+    ) -> None:
+        payload = {
+            "schema_version": 1,
+            "session": None,
+            "focus_guard": None,
+        }
+        if session is not None:
+            payload["session"] = {
+                "origin_window_id": session.origin_window_id,
+                "origin_display": session.origin_workflow_space.display,
+                "origin_space": session.origin_workflow_space.space,
+                "updated_at": _utc_now(),
+            }
+        if focus_guard is not None:
+            focus_guard_payload: Dict[str, Any] = {
+                "display": focus_guard.workflow_space.display,
+                "space": focus_guard.workflow_space.space,
+                "updated_at": _utc_now(),
+            }
+            if focus_guard.target_window_id is not None:
+                focus_guard_payload["target_window_id"] = focus_guard.target_window_id
+            payload["focus_guard"] = focus_guard_payload
+
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with NamedTemporaryFile(
             "w",

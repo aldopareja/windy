@@ -366,6 +366,14 @@ def alttab_session_cancel_main(argv: Optional[List[str]] = None) -> int:
             + "."
         ),
     )
+    parser.add_argument(
+        "--window-id",
+        default=os.environ.get("YABAI_WINDOW_ID"),
+        help=(
+            "Optional selected yabai window id for cancel paths that already know the "
+            "native focus target, such as thumbnail click."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -373,6 +381,7 @@ def alttab_session_cancel_main(argv: Optional[List[str]] = None) -> int:
             command_name="alttab_session_cancel",
             raw_value=args.reason,
         )
+        selected_window_id = _parse_optional_signal_window_id(raw_value=args.window_id)
     except WorkflowError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -381,6 +390,7 @@ def alttab_session_cancel_main(argv: Optional[List[str]] = None) -> int:
     service = AltTabSessionCancelService(
         session_store=session_store,
         reason=reason,
+        selected_window_id=selected_window_id,
     )
 
     try:
@@ -529,6 +539,25 @@ def _parse_signal_event(
         )
 
     return candidate
+
+
+def _parse_optional_signal_window_id(*, raw_value: Optional[str]) -> int | None:
+    if raw_value is None:
+        return None
+
+    candidate = raw_value.strip()
+    if not candidate:
+        return None
+
+    try:
+        window_id = int(candidate)
+    except ValueError as exc:
+        raise WorkflowError(f"received an invalid window id: {raw_value!r}") from exc
+
+    if window_id <= 0:
+        raise WorkflowError(f"received an invalid window id: {raw_value!r}")
+
+    return window_id
 
 
 def _parse_required_reason(*, command_name: str, raw_value: Optional[str]) -> str:

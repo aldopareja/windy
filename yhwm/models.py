@@ -105,6 +105,12 @@ class ArmedAltTabSession:
 
 
 @dataclass(frozen=True)
+class AltTabFocusGuard:
+    workflow_space: EligibleWorkflowSpace
+    target_window_id: Optional[int]
+
+
+@dataclass(frozen=True)
 class AltTabSessionArmResult:
     workflow_space: Optional[EligibleWorkflowSpace]
     origin_window_id: Optional[int]
