@@ -47,6 +47,12 @@ class YabaiClient(Protocol):
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         ...
 
+    def add_signal(self, event: str, action: str, label: str) -> None:
+        ...
+
+    def remove_signal(self, signal_selector: str) -> None:
+        ...
+
 
 class SubprocessYabaiClient:
     def __init__(self, yabai_bin: str = "yabai"):
@@ -163,6 +169,25 @@ class SubprocessYabaiClient:
                 "Failed to swap visible workflow windows "
                 f"{window_id} and {target_window_id}"
             ),
+        )
+
+    def add_signal(self, event: str, action: str, label: str) -> None:
+        self._run_text(
+            [
+                "-m",
+                "signal",
+                "--add",
+                f"event={event}",
+                f"action={action}",
+                f"label={label}",
+            ],
+            error_context=f"Failed to add yabai signal '{label}'",
+        )
+
+    def remove_signal(self, signal_selector: str) -> None:
+        self._run_text(
+            ["-m", "signal", "--remove", signal_selector],
+            error_context=f"Failed to remove yabai signal '{signal_selector}'",
         )
 
     def _run_json(self, arguments: List[str], *, error_context: str) -> Any:

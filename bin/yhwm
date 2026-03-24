@@ -12,8 +12,8 @@ def _bootstrap() -> None:
 
 _bootstrap()
 
-from yhwm.cli import split_main
+from yhwm.cli import main
 
 
 if __name__ == "__main__":
-    raise SystemExit(split_main())
+    raise SystemExit(main())

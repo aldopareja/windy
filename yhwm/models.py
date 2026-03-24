@@ -15,127 +15,35 @@ class EligibleWorkflowSpace:
 
 
 @dataclass(frozen=True)
-class CollapseResult:
+class TrackedSpaceState:
     workflow_space: EligibleWorkflowSpace
-    focused_window_id: int
-    background_window_ids: List[int]
-
-    def to_state_payload(self) -> Dict[str, object]:
-        return {
-            "display": self.workflow_space.display,
-            "space": self.workflow_space.space,
-            "visible_window_id": self.focused_window_id,
-            "background_window_ids": list(self.background_window_ids),
-        }
-
-
-@dataclass(frozen=True)
-class SplitResult:
-    workflow_space: EligibleWorkflowSpace
-    focused_window_id: int
-    promoted_window_id: Optional[int]
+    leader_window_id: int
     background_window_ids: List[int]
     pending_split_direction: Optional[str]
 
 
 @dataclass(frozen=True)
-class WorkflowSpaceState:
-    workflow_space: EligibleWorkflowSpace
-    visible_window_id: int
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-
-
-@dataclass(frozen=True)
-class WindowCreatedResult:
-    created_window_id: int
-    workflow_space: Optional[EligibleWorkflowSpace]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-
-
-@dataclass(frozen=True)
-class WindowFocusedResult:
-    focused_window_id: int
-    workflow_space: Optional[EligibleWorkflowSpace]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-
-
-@dataclass(frozen=True)
-class BackgroundWindowExitCleanupResult:
-    window_id: int
-    event: str
-    workflow_space: Optional[EligibleWorkflowSpace]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-
-
-@dataclass(frozen=True)
-class BackgroundWindowReturnAsNewResult:
-    window_id: int
-    event: str
-    workflow_space: Optional[EligibleWorkflowSpace]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-
-
-@dataclass(frozen=True)
-class TrackedVisibleWindowExitRecoveryResult:
-    window_id: int
-    event: str
-    workflow_space: Optional[EligibleWorkflowSpace]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-
-
-@dataclass(frozen=True)
-class ArmedAltTabSession:
+class AltTabSession:
     origin_window_id: int
     origin_workflow_space: EligibleWorkflowSpace
-    selected_window_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
-class AltTabFocusGuard:
+class FocusGuard:
     workflow_space: EligibleWorkflowSpace
     target_window_id: Optional[int]
 
 
 @dataclass(frozen=True)
-class AltTabSessionArmResult:
-    workflow_space: Optional[EligibleWorkflowSpace]
-    origin_window_id: Optional[int]
-    action: str
-    session_active: bool
+class RuntimeState:
+    spaces: Dict[str, TrackedSpaceState]
+    alttab_session: Optional[AltTabSession]
+    focus_guard: Optional[FocusGuard]
 
-
-@dataclass(frozen=True)
-class AltTabSessionCancelResult:
-    workflow_space: Optional[EligibleWorkflowSpace]
-    origin_window_id: Optional[int]
-    selected_window_id: Optional[int]
-    reason: str
-    action: str
-    session_active: bool
-
-
-@dataclass(frozen=True)
-class AltTabModifierReleaseResult:
-    workflow_space: Optional[EligibleWorkflowSpace]
-    origin_window_id: Optional[int]
-    selected_window_id: Optional[int]
-    action: str
-    visible_window_id: Optional[int]
-    background_window_ids: List[int]
-    pending_split_direction: Optional[str]
-    session_active: bool
+    @staticmethod
+    def empty() -> "RuntimeState":
+        return RuntimeState(
+            spaces={},
+            alttab_session=None,
+            focus_guard=None,
+        )
