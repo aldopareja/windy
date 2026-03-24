@@ -74,7 +74,7 @@ class BackgroundWindowReturnAsNewServiceTests(unittest.TestCase):
                 yabai=client,
                 state_store=WorkflowStateStore(state_path),
                 window_id=102,
-                event="window_moved",
+                event="window_deminimized",
             ).run()
 
             self.assertEqual(result.action, "consumed_pending_split")
@@ -167,7 +167,7 @@ class BackgroundWindowReturnAsNewServiceTests(unittest.TestCase):
                 yabai=client,
                 state_store=WorkflowStateStore(state_path),
                 window_id=102,
-                event="window_moved",
+                event="window_deminimized",
             ).run()
 
             self.assertEqual(result.action, "ignored_already_tracked")
@@ -304,6 +304,34 @@ class BackgroundWindowReturnAsNewServiceTests(unittest.TestCase):
                     yabai=client,
                     state_store=WorkflowStateStore(state_path),
                     window_id=102,
+                    event="window_deminimized",
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
+
+    def test_unsupported_event_is_rejected_before_window_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeBackgroundWindowReturnAsNewYabaiClient(
+                window_records={
+                    102: eligible_window(102),
+                },
+                space_windows={2: [101, 102, 103]},
+                fail_on_query_window_id=102,
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "unsupported event"):
+                BackgroundWindowReturnAsNewService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=102,
                     event="window_moved",
                 ).run()
 
@@ -327,6 +355,25 @@ class BackgroundWindowReturnAsNewCliTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 1)
+
+    def test_unsupported_event_returns_failure(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = background_window_return_as_new_main(
+                [
+                    "--window-id",
+                    "102",
+                    "--event",
+                    "window_moved",
+                    "--state-file",
+                    "/tmp/unused-state.json",
+                    "--yabai-bin",
+                    "/usr/bin/false",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("unsupported event", stderr.getvalue())
 
 
 class FakeBackgroundWindowReturnAsNewYabaiClient:

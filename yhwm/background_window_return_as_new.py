@@ -7,14 +7,14 @@ from .current_space import (
     validate_workflow_space,
 )
 from .eligibility import is_eligible_window
+from .errors import WorkflowError
 from .models import BackgroundWindowReturnAsNewResult, WorkflowSpaceState
 from .new_eligible_window import place_window_as_new_eligible
 from .state import WorkflowStateStore
 from .yabai import YabaiClient
 
-SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS = frozenset(
-    {"window_deminimized", "window_moved"}
-)
+WINDOW_DEMINIMIZED_EVENT = "window_deminimized"
+SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS = frozenset({WINDOW_DEMINIMIZED_EVENT})
 
 
 class BackgroundWindowReturnAsNewService:
@@ -32,6 +32,9 @@ class BackgroundWindowReturnAsNewService:
         self._event = event
 
     def run(self) -> BackgroundWindowReturnAsNewResult:
+        normalized_event = _normalize_supported_background_window_return_event(
+            self._event
+        )
         returning_window = query_window_record(
             self._yabai,
             window_id=self._window_id,
@@ -48,7 +51,7 @@ class BackgroundWindowReturnAsNewService:
         ):
             return BackgroundWindowReturnAsNewResult(
                 window_id=self._window_id,
-                event=self._event,
+                event=normalized_event,
                 workflow_space=workflow_space,
                 action="ignored_ineligible",
                 visible_window_id=None,
@@ -60,7 +63,7 @@ class BackgroundWindowReturnAsNewService:
         if persisted_space_state is None:
             return BackgroundWindowReturnAsNewResult(
                 window_id=self._window_id,
-                event=self._event,
+                event=normalized_event,
                 workflow_space=workflow_space,
                 action="ignored_untracked_space",
                 visible_window_id=None,
@@ -74,7 +77,7 @@ class BackgroundWindowReturnAsNewService:
         ):
             return BackgroundWindowReturnAsNewResult(
                 window_id=self._window_id,
-                event=self._event,
+                event=normalized_event,
                 workflow_space=workflow_space,
                 action="ignored_already_tracked",
                 visible_window_id=persisted_space_state.visible_window_id,
@@ -102,7 +105,7 @@ class BackgroundWindowReturnAsNewService:
         )
         return BackgroundWindowReturnAsNewResult(
             window_id=self._window_id,
-            event=self._event,
+            event=normalized_event,
             workflow_space=workflow_space,
             action=placement.action,
             visible_window_id=placement.visible_window_id,
@@ -119,3 +122,13 @@ def _is_window_tracked_anywhere(
         or window_id in space_state.background_window_ids
         for space_state in space_states
     )
+
+
+def _normalize_supported_background_window_return_event(raw_event: str) -> str:
+    candidate = raw_event.strip().lower()
+    if candidate not in SUPPORTED_BACKGROUND_WINDOW_RETURN_EVENTS:
+        raise WorkflowError(
+            "background_window_return_as_new received an unsupported event: "
+            f"{raw_event!r}"
+        )
+    return candidate

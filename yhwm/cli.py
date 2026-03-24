@@ -197,7 +197,7 @@ def background_window_return_as_new_main(argv: Optional[List[str]] = None) -> in
     parser = _build_parser(
         prog="background_window_return_as_new",
         description=(
-            "Handle one supported yabai lifecycle signal for a formerly removed "
+            "Handle one yabai window_deminimized signal for a formerly removed "
             "background workflow window that has become eligible again, reusing "
             "the tracked new-window placement path when its current workflow "
             "space is already persisted."
