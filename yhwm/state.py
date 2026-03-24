@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .errors import WorkflowError
-from .models import CollapseResult, EligibleWorkflowSpace
+from .models import CollapseResult, EligibleWorkflowSpace, WorkflowSpaceState
 
 
 class WorkflowStateStore:
@@ -28,22 +28,36 @@ class WorkflowStateStore:
             workflow_space=result.workflow_space,
             visible_window_id=result.focused_window_id,
             background_window_ids=result.background_window_ids,
+            pending_split_direction=None,
         )
 
-    def read_background_window_ids(
+    def read_space_state(
         self, workflow_space: EligibleWorkflowSpace
-    ) -> List[int]:
+    ) -> Optional[WorkflowSpaceState]:
         payload = self._load()
         spaces = payload["spaces"]
         entry = spaces.get(workflow_space.storage_key)
         if entry is None:
-            return []
+            return None
 
         validated_entry = self._validate_space_entry(
             workflow_space=workflow_space,
             raw_entry=entry,
         )
-        return list(validated_entry["background_window_ids"])
+        return WorkflowSpaceState(
+            workflow_space=workflow_space,
+            visible_window_id=validated_entry["visible_window_id"],
+            background_window_ids=list(validated_entry["background_window_ids"]),
+            pending_split_direction=validated_entry["pending_split_direction"],
+        )
+
+    def read_background_window_ids(
+        self, workflow_space: EligibleWorkflowSpace
+    ) -> List[int]:
+        space_state = self.read_space_state(workflow_space)
+        if space_state is None:
+            return []
+        return list(space_state.background_window_ids)
 
     def prepare_background_pool_payload(
         self,
@@ -51,16 +65,20 @@ class WorkflowStateStore:
         workflow_space: EligibleWorkflowSpace,
         visible_window_id: int,
         background_window_ids: List[int],
+        pending_split_direction: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload = self._load()
         spaces = payload.setdefault("spaces", {})
-        spaces[workflow_space.storage_key] = {
+        entry = {
             "display": workflow_space.display,
             "space": workflow_space.space,
             "visible_window_id": visible_window_id,
             "background_window_ids": list(background_window_ids),
             "updated_at": _utc_now(),
         }
+        if pending_split_direction is not None:
+            entry["pending_split_direction"] = pending_split_direction
+        spaces[workflow_space.storage_key] = entry
         payload["schema_version"] = 1
         return payload
 
@@ -189,11 +207,29 @@ class WorkflowStateStore:
                 )
             normalized_background_window_ids.append(window_id)
 
+        pending_split_direction = entry.get("pending_split_direction")
+        normalized_pending_split_direction: Optional[str] = None
+        if pending_split_direction is not None:
+            if not isinstance(pending_split_direction, str):
+                raise WorkflowError(
+                    "Workflow state file has invalid schema: "
+                    f"space entry '{workflow_space.storage_key}' must contain string "
+                    f"'pending_split_direction' when present in {self._path}"
+                )
+            normalized_pending_split_direction = pending_split_direction.strip().lower()
+            if not normalized_pending_split_direction:
+                raise WorkflowError(
+                    "Workflow state file has invalid schema: "
+                    f"space entry '{workflow_space.storage_key}' must not contain an empty "
+                    f"'pending_split_direction' in {self._path}"
+                )
+
         return {
             "display": display,
             "space": space,
             "visible_window_id": visible_window_id,
             "background_window_ids": normalized_background_window_ids,
+            "pending_split_direction": normalized_pending_split_direction,
         }
 
     def _write(self, payload: Dict[str, Any]) -> None:

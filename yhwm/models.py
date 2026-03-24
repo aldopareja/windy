@@ -36,3 +36,20 @@ class SplitResult:
     promoted_window_id: Optional[int]
     background_window_ids: List[int]
     pending_split_direction: Optional[str]
+
+
+@dataclass(frozen=True)
+class WorkflowSpaceState:
+    workflow_space: EligibleWorkflowSpace
+    visible_window_id: int
+    background_window_ids: List[int]
+    pending_split_direction: Optional[str]
+
+
+@dataclass(frozen=True)
+class WindowCreatedResult:
+    created_window_id: int
+    workflow_space: Optional[EligibleWorkflowSpace]
+    action: str
+    visible_window_id: Optional[int]
+    background_window_ids: List[int]

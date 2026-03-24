@@ -23,9 +23,13 @@ class SplitFromBackgroundPoolService:
             allowed_layouts=("bsp",),
         )
 
-        persisted_background_window_ids = self._state_store.read_background_window_ids(
-            target.workflow_space
-        )
+        persisted_space_state = self._state_store.read_space_state(target.workflow_space)
+        if persisted_space_state is None:
+            persisted_background_window_ids: list[int] = []
+        else:
+            persisted_background_window_ids = list(
+                persisted_space_state.background_window_ids
+            )
         eligible_windows = query_eligible_windows(
             self._yabai,
             workflow_space=target.workflow_space,
@@ -43,10 +47,17 @@ class SplitFromBackgroundPoolService:
         ]
 
         if not eligible_background_window_ids:
+            prepared_state_payload = self._state_store.prepare_background_pool_payload(
+                workflow_space=target.workflow_space,
+                visible_window_id=target.focused_window_id,
+                background_window_ids=[],
+                pending_split_direction=DEFAULT_PENDING_SPLIT_DIRECTION,
+            )
             self._yabai.arm_window_split(
                 target.focused_window_id,
                 DEFAULT_PENDING_SPLIT_DIRECTION,
             )
+            self._state_store.write_payload(prepared_state_payload)
             return SplitResult(
                 workflow_space=target.workflow_space,
                 focused_window_id=target.focused_window_id,
@@ -65,6 +76,7 @@ class SplitFromBackgroundPoolService:
             workflow_space=target.workflow_space,
             visible_window_id=target.focused_window_id,
             background_window_ids=remaining_background_window_ids,
+            pending_split_direction=None,
         )
 
         # Background pool members are stacked behind the focused tile, so promotion

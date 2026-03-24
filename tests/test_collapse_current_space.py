@@ -305,7 +305,13 @@ class SplitFromBackgroundPoolTests(unittest.TestCase):
                 client.actions,
                 [("insert", 101, DEFAULT_PENDING_SPLIT_DIRECTION)],
             )
-            self.assertFalse(state_path.exists())
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [])
+            self.assertEqual(
+                payload["spaces"]["1:2"]["pending_split_direction"],
+                DEFAULT_PENDING_SPLIT_DIRECTION,
+            )
+            self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 101)
 
     def test_split_ignores_stale_and_ineligible_background_ids_and_refreshes_pool(
         self,
@@ -549,18 +555,23 @@ def write_state_entry(
     *,
     background_window_ids: list[int],
     visible_window_id: int,
+    pending_split_direction: Optional[str] = None,
 ) -> None:
+    entry = {
+        "display": 1,
+        "space": 2,
+        "visible_window_id": visible_window_id,
+        "background_window_ids": background_window_ids,
+    }
+    if pending_split_direction is not None:
+        entry["pending_split_direction"] = pending_split_direction
+
     path.write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "spaces": {
-                    "1:2": {
-                        "display": 1,
-                        "space": 2,
-                        "visible_window_id": visible_window_id,
-                        "background_window_ids": background_window_ids,
-                    }
+                    "1:2": entry
                 },
             },
             indent=2,

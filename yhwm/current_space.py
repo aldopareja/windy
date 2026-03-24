@@ -15,18 +15,36 @@ class CurrentSpaceTarget:
     focused_window_id: int
 
 
-def resolve_current_space_target(
-    yabai: YabaiClient, *, allowed_layouts: Collection[str]
-) -> CurrentSpaceTarget:
-    focused_window = _require_mapping(
-        yabai.query_focused_window(),
-        "focused window query",
+def query_window_record(
+    yabai: YabaiClient, *, window_id: int, description: str
+) -> Dict[str, Any]:
+    window = _require_mapping(
+        yabai.query_window(window_id),
+        f"{description} query",
     )
-    workflow_space = EligibleWorkflowSpace(
-        display=_require_int(focused_window, "display", "focused window"),
-        space=_require_int(focused_window, "space", "focused window"),
+    record_window_id = _require_int(window, "id", description)
+    if record_window_id != window_id:
+        raise WorkflowError(
+            f"Expected yabai to return window {window_id} for {description}."
+        )
+    return {**window, "id": record_window_id}
+
+
+def derive_workflow_space_from_window(
+    window: Mapping[str, Any], *, description: str
+) -> EligibleWorkflowSpace:
+    return EligibleWorkflowSpace(
+        display=_require_int(window, "display", description),
+        space=_require_int(window, "space", description),
     )
 
+
+def validate_workflow_space(
+    yabai: YabaiClient,
+    *,
+    workflow_space: EligibleWorkflowSpace,
+    allowed_layouts: Collection[str],
+) -> None:
     target_display = _require_mapping(
         yabai.query_display(workflow_space.display),
         "display query",
@@ -42,6 +60,24 @@ def resolve_current_space_target(
         space_record=target_space,
     )
     _validate_environment(yabai, workflow_space.space, allowed_layouts=allowed_layouts)
+
+
+def resolve_current_space_target(
+    yabai: YabaiClient, *, allowed_layouts: Collection[str]
+) -> CurrentSpaceTarget:
+    focused_window = _require_mapping(
+        yabai.query_focused_window(),
+        "focused window query",
+    )
+    workflow_space = derive_workflow_space_from_window(
+        focused_window,
+        description="focused window",
+    )
+    validate_workflow_space(
+        yabai,
+        workflow_space=workflow_space,
+        allowed_layouts=allowed_layouts,
+    )
 
     focused_window_id = _require_int(focused_window, "id", "focused window")
     if not is_eligible_window(
