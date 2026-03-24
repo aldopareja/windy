@@ -26,7 +26,16 @@ def query_window_record(
     if record_window_id != window_id:
         raise WorkflowError(
             f"Expected yabai to return window {window_id} for {description}."
-        )
+    )
+    return {**window, "id": record_window_id}
+
+
+def query_focused_window_record(yabai: YabaiClient, *, description: str) -> Dict[str, Any]:
+    window = _require_mapping(
+        yabai.query_focused_window(),
+        f"{description} query",
+    )
+    record_window_id = _require_int(window, "id", description)
     return {**window, "id": record_window_id}
 
 

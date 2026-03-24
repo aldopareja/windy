@@ -10,7 +10,7 @@ from .current_space import (
 from .eligibility import is_eligible_window
 from .errors import WorkflowError
 from .models import WindowFocusedResult
-from .state import WorkflowStateStore
+from .state import AltTabSessionStore, WorkflowStateStore
 from .yabai import YabaiClient
 
 
@@ -20,13 +20,27 @@ class WindowFocusedService:
         *,
         yabai: YabaiClient,
         state_store: WorkflowStateStore,
+        alttab_session_store: AltTabSessionStore | None = None,
         window_id: int,
     ):
         self._yabai = yabai
         self._state_store = state_store
+        self._alttab_session_store = alttab_session_store
         self._window_id = window_id
 
     def run(self) -> WindowFocusedResult:
+        if self._alttab_session_store is not None:
+            armed_session = self._alttab_session_store.read_session()
+            if armed_session is not None:
+                return WindowFocusedResult(
+                    focused_window_id=self._window_id,
+                    workflow_space=armed_session.origin_workflow_space,
+                    action="ignored_armed_alttab_session",
+                    visible_window_id=None,
+                    background_window_ids=[],
+                    pending_split_direction=None,
+                )
+
         focused_window = query_window_record(
             self._yabai,
             window_id=self._window_id,

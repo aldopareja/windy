@@ -7,7 +7,12 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Dict, List, Optional
 
 from .errors import WorkflowError
-from .models import CollapseResult, EligibleWorkflowSpace, WorkflowSpaceState
+from .models import (
+    ArmedAltTabSession,
+    CollapseResult,
+    EligibleWorkflowSpace,
+    WorkflowSpaceState,
+)
 
 
 class WorkflowStateStore:
@@ -314,3 +319,125 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
         "+00:00", "Z"
     )
+
+
+class AltTabSessionStore:
+    def __init__(self, path: Path):
+        self._path = path
+
+    @staticmethod
+    def default_path() -> Path:
+        runtime_root = Path(__file__).resolve().parents[1]
+        return runtime_root / "state" / "alttab_session.json"
+
+    def read_session(self) -> Optional[ArmedAltTabSession]:
+        payload = self._load()
+        raw_session = payload["session"]
+        if raw_session is None:
+            return None
+
+        if not isinstance(raw_session, dict):
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'session' must be an object or null in {self._path}"
+            )
+
+        origin_window_id = raw_session.get("origin_window_id")
+        if not isinstance(origin_window_id, int) or origin_window_id <= 0:
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'origin_window_id' must be a positive integer in {self._path}"
+            )
+
+        origin_display = raw_session.get("origin_display")
+        if not isinstance(origin_display, int) or origin_display <= 0:
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'origin_display' must be a positive integer in {self._path}"
+            )
+
+        origin_space = raw_session.get("origin_space")
+        if not isinstance(origin_space, int) or origin_space <= 0:
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'origin_space' must be a positive integer in {self._path}"
+            )
+
+        return ArmedAltTabSession(
+            origin_window_id=origin_window_id,
+            origin_workflow_space=EligibleWorkflowSpace(
+                display=origin_display,
+                space=origin_space,
+            ),
+        )
+
+    def arm_session(self, session: ArmedAltTabSession) -> None:
+        payload = {
+            "schema_version": 1,
+            "session": {
+                "origin_window_id": session.origin_window_id,
+                "origin_display": session.origin_workflow_space.display,
+                "origin_space": session.origin_workflow_space.space,
+                "updated_at": _utc_now(),
+            },
+        }
+        self._write(payload)
+
+    def clear_session(self) -> None:
+        self._write(
+            {
+                "schema_version": 1,
+                "session": None,
+            }
+        )
+
+    def _load(self) -> Dict[str, Any]:
+        if not self._path.exists():
+            return {"schema_version": 1, "session": None}
+
+        try:
+            raw_text = self._path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WorkflowError(
+                f"AltTab session file is not readable: {self._path}"
+            ) from exc
+
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(
+                f"AltTab session file is not valid JSON: {self._path}"
+            ) from exc
+        return self._validate_loaded_payload(payload)
+
+    def _validate_loaded_payload(self, payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise WorkflowError(
+                f"AltTab session file has invalid schema: expected a top-level object in {self._path}"
+            )
+
+        normalized_payload = dict(payload)
+
+        schema_version = normalized_payload.get("schema_version")
+        if schema_version is not None and not isinstance(schema_version, int):
+            raise WorkflowError(
+                "AltTab session file has invalid schema: "
+                f"'schema_version' must be an integer in {self._path}"
+            )
+
+        if "session" not in normalized_payload:
+            normalized_payload["session"] = None
+        return normalized_payload
+
+    def _write(self, payload: Dict[str, Any]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=self._path.parent,
+            delete=False,
+        ) as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            temp_path = Path(handle.name)
+        temp_path.replace(self._path)
