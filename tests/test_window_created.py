@@ -26,6 +26,7 @@ class WindowFocusedServiceTests(unittest.TestCase):
             )
             client = FakeWindowCreatedYabaiClient(
                 focused_window_id=102,
+                recent_window_id=101,
                 window_records={
                     101: eligible_window(101),
                     102: eligible_window(102, **{"has-focus": True}),
@@ -254,6 +255,7 @@ class WindowFocusedServiceTests(unittest.TestCase):
             )
             focus_client = FakeWindowCreatedYabaiClient(
                 focused_window_id=102,
+                recent_window_id=101,
                 window_records={
                     101: eligible_window(101),
                     102: eligible_window(102, **{"has-focus": True}),
@@ -295,6 +297,167 @@ class WindowFocusedServiceTests(unittest.TestCase):
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["spaces"]["1:2"]["visible_window_id"], 104)
             self.assertEqual(payload["spaces"]["1:2"]["background_window_ids"], [103])
+
+    def test_tracked_cross_space_focus_transition_is_ignored_without_state_change(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entries(
+                state_path,
+                [
+                    {
+                        "display": 1,
+                        "space": 2,
+                        "visible_window_id": 101,
+                        "background_window_ids": [103],
+                    },
+                    {
+                        "display": 1,
+                        "space": 3,
+                        "visible_window_id": 201,
+                        "background_window_ids": [202],
+                        "pending_split_direction": "west",
+                    },
+                ],
+            )
+            original_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=203,
+                recent_window_id=101,
+                window_records={
+                    101: eligible_window(101),
+                    103: eligible_window(103),
+                    201: eligible_window(201, space=3),
+                    202: eligible_window(202, space=3),
+                    203: eligible_window(203, space=3, **{"has-focus": True}),
+                },
+                space_windows={
+                    2: [101, 103],
+                    3: [201, 202, 203],
+                },
+                display_spaces={1: [2, 3]},
+                space_displays={2: 1, 3: 1},
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=203,
+            ).run()
+
+            self.assertEqual(result.action, "ignored_cross_space_or_display_transition")
+            self.assertEqual(result.visible_window_id, 201)
+            self.assertEqual(result.background_window_ids, [202])
+            self.assertEqual(result.pending_split_direction, "west")
+            self.assertEqual(client.actions, [])
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8")),
+                original_payload,
+            )
+
+    def test_tracked_cross_display_focus_transition_is_ignored_without_state_change(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entries(
+                state_path,
+                [
+                    {
+                        "display": 1,
+                        "space": 2,
+                        "visible_window_id": 101,
+                        "background_window_ids": [103],
+                    },
+                    {
+                        "display": 2,
+                        "space": 5,
+                        "visible_window_id": 201,
+                        "background_window_ids": [202],
+                    },
+                ],
+            )
+            original_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=203,
+                recent_window_id=101,
+                window_records={
+                    101: eligible_window(101),
+                    103: eligible_window(103),
+                    201: eligible_window(201, display=2, space=5),
+                    202: eligible_window(202, display=2, space=5),
+                    203: eligible_window(
+                        203,
+                        display=2,
+                        space=5,
+                        **{"has-focus": True},
+                    ),
+                },
+                space_windows={
+                    2: [101, 103],
+                    5: [201, 202, 203],
+                },
+                display_spaces={
+                    1: [2],
+                    2: [5],
+                },
+                space_displays={
+                    2: 1,
+                    5: 2,
+                },
+            )
+
+            result = WindowFocusedService(
+                yabai=client,
+                state_store=WorkflowStateStore(state_path),
+                window_id=203,
+            ).run()
+
+            self.assertEqual(result.action, "ignored_cross_space_or_display_transition")
+            self.assertEqual(result.visible_window_id, 201)
+            self.assertEqual(result.background_window_ids, [202])
+            self.assertEqual(result.pending_split_direction, None)
+            self.assertEqual(client.actions, [])
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8")),
+                original_payload,
+            )
+
+    def test_visible_focus_update_requires_recent_window_query_to_identify_source_space(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_path = Path(tempdir) / "workflow_state.json"
+            write_state_entry(
+                state_path,
+                visible_window_id=101,
+                background_window_ids=[103],
+            )
+            original_state = state_path.read_text(encoding="utf-8")
+            client = FakeWindowCreatedYabaiClient(
+                focused_window_id=102,
+                fail_on_recent_query=True,
+                window_records={
+                    101: eligible_window(101),
+                    102: eligible_window(102, **{"has-focus": True}),
+                    103: eligible_window(103),
+                },
+                space_windows={2: [101, 102, 103]},
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowError,
+                "most recently focused window",
+            ):
+                WindowFocusedService(
+                    yabai=client,
+                    state_store=WorkflowStateStore(state_path),
+                    window_id=102,
+                ).run()
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_state)
 
 
 class WindowCreatedServiceTests(unittest.TestCase):
@@ -714,23 +877,33 @@ def write_state_entry(
     visible_window_id: int,
     background_window_ids: list[int],
     pending_split_direction: str | None = None,
+    display: int = 1,
+    space: int = 2,
 ) -> None:
     entry = {
-        "display": 1,
-        "space": 2,
+        "display": display,
+        "space": space,
         "visible_window_id": visible_window_id,
         "background_window_ids": background_window_ids,
     }
     if pending_split_direction is not None:
         entry["pending_split_direction"] = pending_split_direction
 
+    write_state_entries(path, [entry])
+
+
+def write_state_entries(path: Path, entries: list[dict[str, object]]) -> None:
+    spaces: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        display = int(entry["display"])
+        space = int(entry["space"])
+        spaces[f"{display}:{space}"] = dict(entry)
+
     path.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "spaces": {
-                    "1:2": entry,
-                },
+                "spaces": spaces,
             },
             indent=2,
             sort_keys=True,

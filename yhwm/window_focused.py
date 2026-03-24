@@ -3,6 +3,7 @@ from __future__ import annotations
 from .current_space import (
     derive_workflow_space_from_window,
     query_eligible_windows,
+    query_recent_window_record,
     query_window_record,
     validate_workflow_space,
 )
@@ -81,6 +82,30 @@ class WindowFocusedService:
                 focused_window_id=self._window_id,
                 workflow_space=workflow_space,
                 action="ignored_background_window",
+                visible_window_id=persisted_space_state.visible_window_id,
+                background_window_ids=list(persisted_space_state.background_window_ids),
+                pending_split_direction=persisted_space_state.pending_split_direction,
+            )
+
+        previous_focused_window = query_recent_window_record(
+            self._yabai,
+            description="most recently focused window",
+        )
+        previous_focused_window_id = int(previous_focused_window["id"])
+        if previous_focused_window_id == self._window_id:
+            raise WorkflowError(
+                "Failed to identify a previously focused window before the current "
+                "focus change."
+            )
+        previous_workflow_space = derive_workflow_space_from_window(
+            previous_focused_window,
+            description="most recently focused window",
+        )
+        if previous_workflow_space != workflow_space:
+            return WindowFocusedResult(
+                focused_window_id=self._window_id,
+                workflow_space=workflow_space,
+                action="ignored_cross_space_or_display_transition",
                 visible_window_id=persisted_space_state.visible_window_id,
                 background_window_ids=list(persisted_space_state.background_window_ids),
                 pending_split_direction=persisted_space_state.pending_split_direction,
