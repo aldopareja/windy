@@ -27,7 +27,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--state-file",
         default=str(RuntimeStateStore.default_path()),
-        help="State file path. Defaults to runtime/state/yhwm-state-v2.json.",
+        help="State file path. Defaults to runtime/state/yhwm-state-v3.json.",
     )
     parser.add_argument(
         "--yabai-bin",
@@ -50,6 +50,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     subparsers.add_parser(
         "float",
         help="Convert the current tracked space to float layout and suspend workflow tracking there.",
+    )
+
+    subparsers.add_parser(
+        "delete-tile",
+        help="Remove the focused tile by sending its window back to the background pool.",
     )
 
     split_parser = subparsers.add_parser(
@@ -151,6 +156,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             runtime.reseed()
         elif args.command == "float":
             runtime.float_space()
+        elif args.command == "delete-tile":
+            runtime.delete_tile()
         elif args.command == "split":
             runtime.split(args.direction)
         elif args.command == "signal":

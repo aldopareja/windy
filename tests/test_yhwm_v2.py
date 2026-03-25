@@ -6,14 +6,61 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from yhwm import cli as cli_module
+from yhwm.errors import WorkflowError
 from yhwm.integration import INIT_BLOCK_END, INIT_BLOCK_START, install_hammerspoon, install_yabai_signals
-from yhwm.models import AltTabSession, EligibleWorkflowSpace, FocusGuard, RuntimeState, TrackedSpaceState
+from yhwm.models import (
+    AltTabSession,
+    EligibleWorkflowSpace,
+    FocusGuard,
+    ManagedSpaceState,
+    ManagedTile,
+    PendingSplit,
+    RuntimeState,
+)
 from yhwm.state import RuntimeStateStore
 from yhwm.workflow import WorkflowRuntime
 
 
-class WorkflowRuntimeV2Tests(unittest.TestCase):
-    def test_reseed_tracks_focused_window_as_leader(self) -> None:
+class RuntimeStateStoreTests(unittest.TestCase):
+    def test_default_path_uses_v3_filename(self) -> None:
+        self.assertTrue(str(RuntimeStateStore.default_path()).endswith("yhwm-state-v3.json"))
+
+    def test_round_trip_v3_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state = RuntimeState(
+                spaces={
+                    workflow_space.storage_key: managed_space(
+                        workflow_space,
+                        [
+                            tile(1, 101, [102, 103]),
+                            tile(2, 201, [202]),
+                        ],
+                        last_focused_tile_id=2,
+                        next_tile_id=5,
+                        pending_split=PendingSplit(tile_id=2, direction="east"),
+                    )
+                },
+                alttab_session=AltTabSession(
+                    origin_window_id=201,
+                    origin_tile_id=2,
+                    origin_workflow_space=workflow_space,
+                ),
+                focus_guard=FocusGuard(
+                    workflow_space=workflow_space,
+                    target_window_id=201,
+                ),
+            )
+
+            store.write(state)
+            loaded = store.read()
+
+            self.assertEqual(loaded, state)
+
+
+class WorkflowRuntimeV3Tests(unittest.TestCase):
+    def test_reseed_tracks_single_tile_with_hidden_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             client = FakeYabaiClient(
@@ -39,11 +86,17 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 ],
             )
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 101)
-            self.assertEqual(tracked.background_window_ids, [102, 103])
-            self.assertIsNone(tracked.pending_split_direction)
+            self.assertEqual(
+                tracked,
+                managed_space(
+                    EligibleWorkflowSpace(display=1, space=2),
+                    [tile(1, 101, [102, 103])],
+                    last_focused_tile_id=1,
+                    next_tile_id=2,
+                ),
+            )
 
-    def test_float_space_converts_tracked_space_and_removes_it_from_state(self) -> None:
+    def test_float_space_clears_managed_space_and_same_space_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
@@ -51,21 +104,19 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[102],
-                            pending_split_direction="east",
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
+                            pending_split=PendingSplit(tile_id=1, direction="east"),
                         ),
-                        other_space.storage_key: TrackedSpaceState(
-                            workflow_space=other_space,
-                            leader_window_id=301,
-                            background_window_ids=[302],
-                            pending_split_direction=None,
+                        other_space.storage_key: managed_space(
+                            other_space,
+                            [tile(1, 301, [302])],
                         ),
                     },
                     alttab_session=AltTabSession(
                         origin_window_id=101,
+                        origin_tile_id=1,
                         origin_workflow_space=workflow_space,
                     ),
                     focus_guard=FocusGuard(
@@ -83,133 +134,27 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
             WorkflowRuntime(yabai=client, state_store=state_store).float_space()
 
             self.assertEqual(client.actions, [("set_layout", 2, "float")])
-            state = state_store.read()
-            self.assertNotIn(workflow_space.storage_key, state.spaces)
-            self.assertIn(other_space.storage_key, state.spaces)
-            self.assertIsNone(state.alttab_session)
-            self.assertIsNone(state.focus_guard)
+            final_state = state_store.read()
+            self.assertNotIn(workflow_space.storage_key, final_state.spaces)
+            self.assertIn(other_space.storage_key, final_state.spaces)
+            self.assertIsNone(final_state.alttab_session)
+            self.assertIsNone(final_state.focus_guard)
 
-    def test_float_space_noops_when_current_space_is_untracked(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            other_space = EligibleWorkflowSpace(display=1, space=3)
-            initial_state = RuntimeState(
-                spaces={
-                    other_space.storage_key: TrackedSpaceState(
-                        workflow_space=other_space,
-                        leader_window_id=301,
-                        background_window_ids=[],
-                        pending_split_direction=None,
-                    )
-                },
-                alttab_session=None,
-                focus_guard=None,
-            )
-            state_store.write(initial_state)
-            client = FakeYabaiClient(
-                windows=[eligible_window(101, has_focus=True)],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-
-            WorkflowRuntime(yabai=client, state_store=state_store).float_space()
-
-            self.assertEqual(client.actions, [])
-            self.assertEqual(state_store.read(), initial_state)
-
-    def test_float_space_noops_when_focused_window_is_ineligible(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            initial_state = RuntimeState(
-                spaces={
-                    workflow_space.storage_key: TrackedSpaceState(
-                        workflow_space=workflow_space,
-                        leader_window_id=101,
-                        background_window_ids=[102],
-                        pending_split_direction=None,
-                    )
-                },
-                alttab_session=None,
-                focus_guard=None,
-            )
-            state_store.write(initial_state)
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101, has_focus=True, **{"is-floating": True}),
-                    eligible_window(102),
-                ],
-                focused_window_id=101,
-                recent_window_id=101,
-                layout_by_space={2: "float"},
-            )
-
-            WorkflowRuntime(yabai=client, state_store=state_store).float_space()
-
-            self.assertEqual(client.actions, [])
-            self.assertEqual(state_store.read(), initial_state)
-
-    def test_float_space_preserves_other_space_session_and_focus_guard(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            other_space = EligibleWorkflowSpace(display=1, space=3)
-            state_store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[],
-                            pending_split_direction=None,
-                        ),
-                        other_space.storage_key: TrackedSpaceState(
-                            workflow_space=other_space,
-                            leader_window_id=301,
-                            background_window_ids=[],
-                            pending_split_direction=None,
-                        ),
-                    },
-                    alttab_session=AltTabSession(
-                        origin_window_id=301,
-                        origin_workflow_space=other_space,
-                    ),
-                    focus_guard=FocusGuard(
-                        workflow_space=other_space,
-                        target_window_id=301,
-                    ),
-                )
-            )
-            client = FakeYabaiClient(
-                windows=[eligible_window(101, has_focus=True)],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-
-            WorkflowRuntime(yabai=client, state_store=state_store).float_space()
-
-            state = state_store.read()
-            self.assertEqual(client.actions, [("set_layout", 2, "float")])
-            self.assertNotIn(workflow_space.storage_key, state.spaces)
-            self.assertIsNotNone(state.alttab_session)
-            self.assertEqual(state.alttab_session.origin_workflow_space, other_space)
-            self.assertEqual(
-                state.focus_guard,
-                FocusGuard(workflow_space=other_space, target_window_id=301),
-            )
-
-    def test_split_promotes_one_background_window(self) -> None:
+    def test_delete_tile_merges_membership_into_recent_visible_survivor(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[102, 103],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [
+                                tile(1, 101, [102]),
+                                tile(2, 201, [202]),
+                            ],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
                         )
                     },
                     alttab_session=None,
@@ -217,30 +162,147 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 )
             )
             client = FakeYabaiClient(
-                windows=[eligible_window(101, has_focus=True), eligible_window(102), eligible_window(103)],
+                windows=[
+                    eligible_window(101, has_focus=True),
+                    eligible_window(102),
+                    eligible_window(201),
+                    eligible_window(202),
+                ],
+                focused_window_id=101,
+                recent_window_id=201,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).delete_tile()
+
+            self.assertEqual(
+                client.actions,
+                [("stack", 201, 101), ("stack", 201, 102), ("focus", 201)],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[2].visible_window_id, 201)
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [202, 101, 102])
+            self.assertEqual(tracked.last_focused_tile_id, 2)
+            self.assertEqual(sorted(tracked.tiles), [2])
+
+    def test_delete_tile_noops_when_only_one_tile_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            initial_state = RuntimeState(
+                spaces={
+                    workflow_space.storage_key: managed_space(
+                        workflow_space,
+                        [tile(1, 101, [102])],
+                    )
+                },
+                alttab_session=None,
+                focus_guard=None,
+            )
+            state_store.write(initial_state)
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(102)],
                 focused_window_id=101,
                 recent_window_id=101,
             )
 
-            WorkflowRuntime(yabai=client, state_store=state_store).split("south")
+            WorkflowRuntime(yabai=client, state_store=state_store).delete_tile()
 
-            self.assertEqual(client.actions, [("promote", 102, "south"), ("focus", 101)])
-            tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.background_window_ids, [103])
-            self.assertIsNone(tracked.pending_split_direction)
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_store.read(), initial_state)
 
-    def test_split_arms_pending_when_background_pool_is_empty(self) -> None:
+    def test_split_borrows_hidden_window_from_another_tile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [
+                                tile(1, 101),
+                                tile(2, 201, [202]),
+                            ],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, has_focus=True),
+                    eligible_window(201),
+                    eligible_window(202),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).split("south")
+
+            self.assertEqual(
+                client.actions,
+                [("arm_split", 101, "south"), ("warp", 202, 101), ("focus", 101)],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(sorted(tracked.tiles), [1, 2, 3])
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [])
+            self.assertEqual(tracked.tiles[3].visible_window_id, 202)
+            self.assertIsNone(tracked.pending_split)
+
+    def test_split_promotes_hidden_window_from_focused_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(102)],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).split("south")
+
+            self.assertEqual(
+                client.actions,
+                [("promote", 102, "south"), ("focus", 101)],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(sorted(tracked.tiles), [1, 2])
+            self.assertEqual(tracked.tiles[1].visible_window_id, 101)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [])
+            self.assertEqual(tracked.tiles[2].visible_window_id, 102)
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [])
+            self.assertIsNone(tracked.pending_split)
+
+    def test_split_arms_pending_when_no_hidden_window_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101)],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
                         )
                     },
                     alttab_session=None,
@@ -257,56 +319,54 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
 
             self.assertEqual(client.actions, [("arm_split", 101, "east")])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.pending_split_direction, "east")
+            self.assertEqual(tracked.pending_split, PendingSplit(tile_id=1, direction="east"))
 
-    def test_focus_visible_window_retargets_background_pool(self) -> None:
+    def test_focus_visible_window_only_updates_last_focused_tile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            state_store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301, 302],
-                            pending_split_direction=None,
-                        )
-                    },
-                    alttab_session=None,
-                    focus_guard=None,
-                )
+            initial_state = RuntimeState(
+                spaces={
+                    workflow_space.storage_key: managed_space(
+                        workflow_space,
+                        [tile(1, 101, [102]), tile(2, 201, [202])],
+                        last_focused_tile_id=1,
+                        next_tile_id=3,
+                    )
+                },
+                alttab_session=None,
+                focus_guard=None,
             )
+            state_store.write(initial_state)
             client = FakeYabaiClient(
                 windows=[
                     eligible_window(101),
-                    eligible_window(202, has_focus=True),
-                    eligible_window(301),
-                    eligible_window(302),
+                    eligible_window(102),
+                    eligible_window(201, has_focus=True),
+                    eligible_window(202),
                 ],
-                focused_window_id=202,
+                focused_window_id=201,
                 recent_window_id=101,
             )
 
-            WorkflowRuntime(yabai=client, state_store=state_store).handle_focus(202)
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_focus(201)
 
-            self.assertEqual(client.actions, [("stack", 202, 301), ("stack", 202, 302)])
+            self.assertEqual(client.actions, [])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 202)
-            self.assertEqual(tracked.background_window_ids, [301, 302])
+            self.assertEqual(tracked.tiles[1], initial_state.spaces["1:2"].tiles[1])
+            self.assertEqual(tracked.tiles[2], initial_state.spaces["1:2"].tiles[2])
+            self.assertEqual(tracked.last_focused_tile_id, 2)
 
-    def test_focus_background_window_swaps_leader_and_background_membership(self) -> None:
+    def test_focus_hidden_window_promotes_it_within_same_tile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301, 302],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102, 103])],
                         )
                     },
                     alttab_session=None,
@@ -316,112 +376,156 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
             client = FakeYabaiClient(
                 windows=[
                     eligible_window(101),
-                    eligible_window(301, has_focus=True),
-                    eligible_window(302),
+                    eligible_window(102, has_focus=True),
+                    eligible_window(103),
                 ],
+                focused_window_id=102,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_focus(102)
+
+            self.assertEqual(client.actions, [])
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[1].visible_window_id, 102)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [101, 103])
+
+    def test_created_window_without_pending_split_auto_stacks_into_last_focused_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102]), tile(2, 201)],
+                            last_focused_tile_id=2,
+                            next_tile_id=3,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(201),
+                    eligible_window(301, has_focus=True),
+                ],
+                focused_window_id=301,
+                recent_window_id=201,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
+                event="window_created",
+                window_id=301,
+            )
+
+            self.assertEqual(client.actions, [("stack", 201, 301), ("focus", 301)])
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[2].visible_window_id, 301)
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [201])
+
+    def test_created_window_with_pending_split_creates_new_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101)],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
+                            pending_split=PendingSplit(tile_id=1, direction="east"),
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101), eligible_window(301, has_focus=True)],
                 focused_window_id=301,
                 recent_window_id=101,
             )
 
-            WorkflowRuntime(yabai=client, state_store=state_store).handle_focus(301)
-
-            self.assertEqual(client.actions, [])
-            tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 301)
-            self.assertEqual(tracked.background_window_ids, [302, 101])
-
-    def test_created_window_without_pending_split_stacks_onto_leader_tile(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            state_store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction=None,
-                        )
-                    },
-                    alttab_session=None,
-                    focus_guard=None,
-                )
-            )
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101),
-                    eligible_window(301),
-                    eligible_window(401, has_focus=True),
-                ],
-                focused_window_id=401,
-                recent_window_id=101,
-            )
-
             WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
                 event="window_created",
-                window_id=401,
-            )
-
-            self.assertEqual(
-                client.actions,
-                [("stack", 101, 401), ("focus", 401), ("stack", 401, 301)],
-            )
-            tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 401)
-            self.assertEqual(tracked.background_window_ids, [301, 101])
-
-    def test_created_window_with_pending_split_only_clears_pending_flag(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            state_store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction="east",
-                        )
-                    },
-                    alttab_session=None,
-                    focus_guard=None,
-                )
-            )
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101),
-                    eligible_window(301),
-                    eligible_window(401, has_focus=True),
-                ],
-                focused_window_id=401,
-                recent_window_id=101,
-            )
-
-            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
-                event="window_created",
-                window_id=401,
+                window_id=301,
             )
 
             self.assertEqual(client.actions, [])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 101)
-            self.assertEqual(tracked.background_window_ids, [301])
-            self.assertIsNone(tracked.pending_split_direction)
+            self.assertEqual(sorted(tracked.tiles), [1, 2])
+            self.assertEqual(tracked.tiles[2].visible_window_id, 301)
+            self.assertIsNone(tracked.pending_split)
 
-    def test_created_window_after_focus_race_reanchors_background_pool(self) -> None:
+    def test_created_window_batch_without_pending_split_absorbs_all_unknown_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=401,
-                            background_window_ids=[301],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(301),
+                    eligible_window(302, has_focus=True),
+                    eligible_window(303),
+                ],
+                focused_window_id=302,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
+                event="window_created",
+                window_id=301,
+            )
+
+            self.assertEqual(
+                client.actions,
+                [
+                    ("stack", 101, 301),
+                    ("stack", 101, 302),
+                    ("stack", 101, 303),
+                    ("focus", 302),
+                ],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[1].visible_window_id, 302)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [101, 102, 301, 303])
+
+    def test_created_window_batch_with_pending_split_creates_one_new_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101)],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
+                            pending_split=PendingSplit(tile_id=1, direction="east"),
                         )
                     },
                     alttab_session=None,
@@ -432,37 +536,80 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 windows=[
                     eligible_window(101),
                     eligible_window(301),
-                    eligible_window(401, has_focus=True),
+                    eligible_window(302, has_focus=True),
+                    eligible_window(303),
                 ],
-                focused_window_id=401,
+                focused_window_id=302,
                 recent_window_id=101,
             )
 
             WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
                 event="window_created",
-                window_id=401,
+                window_id=301,
             )
 
             self.assertEqual(
                 client.actions,
-                [("stack", 101, 401), ("focus", 401), ("stack", 401, 301)],
+                [
+                    ("stack", 302, 301),
+                    ("stack", 302, 303),
+                ],
             )
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 401)
-            self.assertEqual(tracked.background_window_ids, [301, 101])
+            self.assertEqual(sorted(tracked.tiles), [1, 2])
+            self.assertEqual(tracked.tiles[2].visible_window_id, 302)
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [301, 303])
+            self.assertIsNone(tracked.pending_split)
 
-    def test_window_moved_ignores_tracked_window_that_is_still_eligible_in_same_space(self) -> None:
+    def test_created_window_event_noops_when_window_was_already_absorbed_by_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            initial_state = RuntimeState(
+                spaces={
+                    workflow_space.storage_key: managed_space(
+                        workflow_space,
+                        [tile(1, 302, [101, 102, 301, 303])],
+                        last_focused_tile_id=1,
+                        next_tile_id=2,
+                    )
+                },
+                alttab_session=None,
+                focus_guard=None,
+            )
+            state_store.write(initial_state)
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(301),
+                    eligible_window(302, has_focus=True),
+                    eligible_window(303),
+                ],
+                focused_window_id=302,
+                recent_window_id=302,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
+                event="window_created",
+                window_id=301,
+            )
+
+            self.assertEqual(client.actions, [])
+            self.assertEqual(state_store.read(), initial_state)
+
+    def test_focus_event_absorbs_multi_window_arrival_batch_instead_of_clearing_state(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
                         )
                     },
                     alttab_session=None,
@@ -470,32 +617,73 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 )
             )
             client = FakeYabaiClient(
-                windows=[eligible_window(101, has_focus=True), eligible_window(301)],
+                windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(301),
+                    eligible_window(302, has_focus=True),
+                    eligible_window(303),
+                ],
+                focused_window_id=302,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_focus(302)
+
+            self.assertEqual(
+                client.actions,
+                [
+                    ("stack", 101, 301),
+                    ("stack", 101, 302),
+                    ("stack", 101, 303),
+                    ("focus", 302),
+                ],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[1].visible_window_id, 302)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [101, 102, 301, 303])
+
+    def test_window_moved_unknown_window_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            initial_state = RuntimeState(
+                spaces={
+                    workflow_space.storage_key: managed_space(
+                        workflow_space,
+                        [tile(1, 101, [102])],
+                    )
+                },
+                alttab_session=None,
+                focus_guard=None,
+            )
+            state_store.write(initial_state)
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(102), eligible_window(999)],
                 focused_window_id=101,
                 recent_window_id=101,
             )
 
             WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
                 event="window_moved",
-                window_id=301,
+                window_id=999,
             )
 
             self.assertEqual(client.actions, [])
-            tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.background_window_ids, [301])
+            self.assertEqual(state_store.read(), initial_state)
 
-    def test_leader_loss_promotes_visible_replacement(self) -> None:
+    def test_visible_window_loss_promotes_same_tile_hidden_window(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction="south",
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102, 103]), tile(2, 201)],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
                         )
                     },
                     alttab_session=None,
@@ -503,9 +691,9 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 )
             )
             client = FakeYabaiClient(
-                windows=[eligible_window(202, has_focus=True), eligible_window(301)],
-                focused_window_id=202,
-                recent_window_id=202,
+                windows=[eligible_window(102), eligible_window(103), eligible_window(201, has_focus=True)],
+                focused_window_id=201,
+                recent_window_id=201,
             )
 
             WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
@@ -513,24 +701,24 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 window_id=101,
             )
 
-            self.assertEqual(client.actions, [("stack", 202, 301)])
+            self.assertEqual(client.actions, [])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 202)
-            self.assertEqual(tracked.background_window_ids, [301])
-            self.assertIsNone(tracked.pending_split_direction)
+            self.assertEqual(tracked.tiles[1].visible_window_id, 102)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [103])
+            self.assertEqual(sorted(tracked.tiles), [1, 2])
 
-    def test_leader_loss_can_promote_background_when_no_visible_window_remains(self) -> None:
+    def test_visible_window_loss_without_hidden_removes_tile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301, 302],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101), tile(2, 201, [202])],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
                         )
                     },
                     alttab_session=None,
@@ -538,107 +726,144 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
                 )
             )
             client = FakeYabaiClient(
-                windows=[eligible_window(301), eligible_window(302)],
-                focused_window_id=301,
+                windows=[eligible_window(201, has_focus=True), eligible_window(202)],
+                focused_window_id=201,
+                recent_window_id=201,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
+                event="window_destroyed",
+                window_id=101,
+            )
+
+            self.assertEqual(client.actions, [])
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(sorted(tracked.tiles), [2])
+            self.assertEqual(tracked.last_focused_tile_id, 2)
+
+    def test_hidden_window_loss_removes_it_from_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102, 103])],
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(103)],
+                focused_window_id=101,
                 recent_window_id=101,
             )
 
             WorkflowRuntime(yabai=client, state_store=state_store).handle_window_event(
                 event="window_destroyed",
-                window_id=101,
+                window_id=102,
             )
 
-            self.assertEqual(client.actions, [("focus", 301)])
+            self.assertEqual(client.actions, [])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 301)
-            self.assertEqual(tracked.background_window_ids, [302])
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [103])
 
-    def test_alttab_visible_swap_retargets_background_pool(self) -> None:
+    def test_alttab_visible_swap_swaps_tile_occupants(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102]), tile(2, 201, [202])],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
                         )
                     },
                     alttab_session=AltTabSession(
                         origin_window_id=101,
+                        origin_tile_id=1,
                         origin_workflow_space=workflow_space,
                     ),
                     focus_guard=None,
                 )
             )
             client = FakeYabaiClient(
-                windows=[eligible_window(101), eligible_window(202, has_focus=True), eligible_window(301)],
-                focused_window_id=202,
+                windows=[
+                    eligible_window(101),
+                    eligible_window(102),
+                    eligible_window(201, has_focus=True),
+                    eligible_window(202),
+                ],
+                focused_window_id=201,
+                recent_window_id=101,
+            )
+
+            WorkflowRuntime(yabai=client, state_store=state_store).alttab_release(201)
+
+            self.assertEqual(client.actions, [("swap", 101, 201), ("focus", 201)])
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(tracked.tiles[1].visible_window_id, 201)
+            self.assertEqual(tracked.tiles[2].visible_window_id, 101)
+            self.assertIsNone(state_store.read().alttab_session)
+
+    def test_alttab_background_selection_moves_hidden_window_into_origin_tile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102]), tile(2, 201, [202])],
+                            last_focused_tile_id=1,
+                            next_tile_id=3,
+                        )
+                    },
+                    alttab_session=AltTabSession(
+                        origin_window_id=101,
+                        origin_tile_id=1,
+                        origin_workflow_space=workflow_space,
+                    ),
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101), eligible_window(102, has_focus=True), eligible_window(201), eligible_window(202)],
+                focused_window_id=102,
                 recent_window_id=101,
             )
 
             WorkflowRuntime(yabai=client, state_store=state_store).alttab_release(202)
 
-            self.assertEqual(client.actions, [("swap", 101, 202), ("focus", 202), ("stack", 202, 301)])
-            state = state_store.read()
-            self.assertIsNone(state.alttab_session)
-            tracked = state.spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 202)
-            self.assertEqual(tracked.background_window_ids, [301])
-
-    def test_alttab_background_selection_focuses_selected_window_and_rewrites_membership(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            state_store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301, 302],
-                            pending_split_direction=None,
-                        )
-                    },
-                    alttab_session=AltTabSession(
-                        origin_window_id=101,
-                        origin_workflow_space=workflow_space,
-                    ),
-                    focus_guard=None,
-                )
-            )
-            client = FakeYabaiClient(
-                windows=[eligible_window(101), eligible_window(301, has_focus=True), eligible_window(302)],
-                focused_window_id=301,
-                recent_window_id=101,
-            )
-
-            WorkflowRuntime(yabai=client, state_store=state_store).alttab_release(301)
-
-            self.assertEqual(client.actions, [("focus", 301)])
+            self.assertEqual(client.actions, [("stack", 101, 202), ("focus", 202)])
             tracked = state_store.read().spaces["1:2"]
-            self.assertEqual(tracked.leader_window_id, 301)
-            self.assertEqual(tracked.background_window_ids, [302, 101])
+            self.assertEqual(tracked.tiles[1].visible_window_id, 202)
+            self.assertEqual(tracked.tiles[1].hidden_window_ids, [101, 102])
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [])
 
-    def test_alttab_cancel_sets_focus_guard_and_next_focus_consumes_it(self) -> None:
+    def test_alttab_cancel_sets_focus_guard_and_next_focus_clears_it(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state_store = RuntimeStateStore(Path(tempdir) / "state.json")
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             state_store.write(
                 RuntimeState(
                     spaces={
-                        workflow_space.storage_key: TrackedSpaceState(
-                            workflow_space=workflow_space,
-                            leader_window_id=101,
-                            background_window_ids=[301],
-                            pending_split_direction=None,
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
                         )
                     },
                     alttab_session=AltTabSession(
                         origin_window_id=101,
+                        origin_tile_id=1,
                         origin_workflow_space=workflow_space,
                     ),
                     focus_guard=None,
@@ -646,7 +871,7 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
             )
             runtime = WorkflowRuntime(
                 yabai=FakeYabaiClient(
-                    windows=[eligible_window(101, has_focus=True), eligible_window(301)],
+                    windows=[eligible_window(101, has_focus=True), eligible_window(102)],
                     focused_window_id=101,
                     recent_window_id=101,
                 ),
@@ -665,10 +890,46 @@ class WorkflowRuntimeV2Tests(unittest.TestCase):
 
             final_state = state_store.read()
             self.assertIsNone(final_state.focus_guard)
-            self.assertEqual(final_state.spaces["1:2"].leader_window_id, 101)
+            self.assertEqual(final_state.spaces["1:2"].tiles[1].visible_window_id, 101)
+
+    def test_split_clears_space_and_raises_on_unknown_live_window_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101)],
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(202)],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+
+            with self.assertRaises(WorkflowError):
+                WorkflowRuntime(yabai=client, state_store=state_store).split("east")
+
+            self.assertEqual(state_store.read().spaces, {})
 
 
 class CliTests(unittest.TestCase):
+    def test_delete_tile_command_dispatches_runtime_delete_tile(self) -> None:
+        runtime = MagicMock()
+        with patch.object(cli_module, "SubprocessYabaiClient", return_value=object()):
+            with patch.object(cli_module, "WorkflowRuntime", return_value=runtime):
+                result = cli_module.main(["delete-tile"])
+
+        self.assertEqual(result, 0)
+        runtime.delete_tile.assert_called_once_with()
+
     def test_float_command_dispatches_runtime_float_space(self) -> None:
         runtime = MagicMock()
         with patch.object(cli_module, "SubprocessYabaiClient", return_value=object()):
@@ -680,8 +941,12 @@ class CliTests(unittest.TestCase):
 
 
 class IntegrationInstallTests(unittest.TestCase):
-    def test_install_yabai_signals_registers_v2_surface(self) -> None:
-        client = FakeYabaiClient(windows=[eligible_window(101, has_focus=True)], focused_window_id=101, recent_window_id=101)
+    def test_install_yabai_signals_registers_runtime_surface(self) -> None:
+        client = FakeYabaiClient(
+            windows=[eligible_window(101, has_focus=True)],
+            focused_window_id=101,
+            recent_window_id=101,
+        )
 
         install_yabai_signals(
             yabai=client,
@@ -778,8 +1043,6 @@ class FakeYabaiClient:
 
     def query_window(self, window_id: int):
         if window_id not in self._windows:
-            from yhwm.errors import WorkflowError
-
             raise WorkflowError(f"missing window {window_id}")
         return dict(self._windows[window_id])
 
@@ -813,6 +1076,9 @@ class FakeYabaiClient:
     def arm_window_split(self, window_id: int, direction: str) -> None:
         self.actions.append(("arm_split", window_id, direction))
 
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        self.actions.append(("warp", window_id, target_window_id))
+
     def focus_window(self, window_id: int) -> None:
         self.actions.append(("focus", window_id))
         if window_id in self._windows:
@@ -832,6 +1098,32 @@ class FakeYabaiClient:
             window["has-focus"] = candidate_window_id == window_id
         self._recent_window_id = self._focused_window_id
         self._focused_window_id = window_id
+
+
+def tile(tile_id: int, visible_window_id: int, hidden_window_ids: list[int] | None = None) -> ManagedTile:
+    return ManagedTile(
+        tile_id=tile_id,
+        visible_window_id=visible_window_id,
+        hidden_window_ids=list(hidden_window_ids or []),
+    )
+
+
+def managed_space(
+    workflow_space: EligibleWorkflowSpace,
+    tiles: list[ManagedTile],
+    *,
+    last_focused_tile_id: int | None = None,
+    next_tile_id: int | None = None,
+    pending_split: PendingSplit | None = None,
+) -> ManagedSpaceState:
+    tile_map = {entry.tile_id: entry for entry in tiles}
+    return ManagedSpaceState(
+        workflow_space=workflow_space,
+        tiles=tile_map,
+        last_focused_tile_id=last_focused_tile_id or min(tile_map),
+        next_tile_id=next_tile_id or (max(tile_map) + 1),
+        pending_split=pending_split,
+    )
 
 
 def eligible_window(
@@ -858,6 +1150,7 @@ def eligible_window(
         "is-native-fullscreen": False,
         "is-minimized": False,
         "is-hidden": False,
+        "is-visible": True,
         "has-focus": has_focus,
     }
     window.update(overrides)

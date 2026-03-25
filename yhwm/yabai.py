@@ -41,6 +41,9 @@ class YabaiClient(Protocol):
     def arm_window_split(self, window_id: int, direction: str) -> None:
         ...
 
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        ...
+
     def focus_window(self, window_id: int) -> None:
         ...
 
@@ -153,6 +156,15 @@ class SubprocessYabaiClient:
             ["-m", "window", str(window_id), "--insert", direction],
             error_context=(
                 f"Failed to arm a pending {direction} split on window {window_id}"
+            ),
+        )
+
+    def warp_window(self, window_id: int, target_window_id: int) -> None:
+        self._run_text(
+            ["-m", "window", str(window_id), "--warp", str(target_window_id)],
+            error_context=(
+                "Failed to warp workflow window "
+                f"{window_id} onto window {target_window_id}"
             ),
         )
 
