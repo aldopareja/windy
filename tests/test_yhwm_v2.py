@@ -245,7 +245,7 @@ class WorkflowRuntimeV3Tests(unittest.TestCase):
 
             self.assertEqual(
                 client.actions,
-                [("arm_split", 101, "south"), ("warp", 202, 101), ("focus", 101)],
+                [("arm_split", 101, "south"), ("warp", 202, 101)],
             )
             tracked = state_store.read().spaces["1:2"]
             self.assertEqual(sorted(tracked.tiles), [1, 2, 3])
@@ -281,7 +281,7 @@ class WorkflowRuntimeV3Tests(unittest.TestCase):
 
             self.assertEqual(
                 client.actions,
-                [("promote", 102, "south"), ("focus", 101)],
+                [("promote", 102, "south")],
             )
             tracked = state_store.read().spaces["1:2"]
             self.assertEqual(sorted(tracked.tiles), [1, 2])
@@ -290,6 +290,51 @@ class WorkflowRuntimeV3Tests(unittest.TestCase):
             self.assertEqual(tracked.tiles[2].visible_window_id, 102)
             self.assertEqual(tracked.tiles[2].hidden_window_ids, [])
             self.assertIsNone(tracked.pending_split)
+
+    def test_native_focus_signal_after_split_updates_next_stack_first_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state_store = RuntimeStateStore(Path(tempdir) / "state.json")
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            state_store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: managed_space(
+                            workflow_space,
+                            [tile(1, 101, [102])],
+                            last_focused_tile_id=1,
+                            next_tile_id=2,
+                        )
+                    },
+                    alttab_session=None,
+                    focus_guard=None,
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, has_focus=True), eligible_window(102)],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(yabai=client, state_store=state_store)
+
+            runtime.split("south")
+
+            client._set_focus(102)
+            runtime.handle_focus(102)
+
+            client._windows[301] = eligible_window(301)
+            client._set_focus(301)
+            runtime.handle_window_event(event="window_created", window_id=301)
+
+            self.assertEqual(
+                client.actions,
+                [("promote", 102, "south"), ("stack", 102, 301), ("focus", 301)],
+            )
+            tracked = state_store.read().spaces["1:2"]
+            self.assertEqual(sorted(tracked.tiles), [1, 2])
+            self.assertEqual(tracked.tiles[1].visible_window_id, 101)
+            self.assertEqual(tracked.tiles[2].visible_window_id, 301)
+            self.assertEqual(tracked.tiles[2].hidden_window_ids, [102])
+            self.assertEqual(tracked.last_focused_tile_id, 2)
 
     def test_split_arms_pending_when_no_hidden_window_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

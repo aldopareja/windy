@@ -269,7 +269,6 @@ class WorkflowRuntime:
         else:
             self._yabai.arm_window_split(focused_visible_window_id, normalized_direction)
             self._yabai.warp_window(candidate, focused_visible_window_id)
-        self._yabai.focus_window(focused_visible_window_id)
 
         new_tile_id = working.next_tile_id
         working.next_tile_id += 1
