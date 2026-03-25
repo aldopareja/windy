@@ -47,6 +47,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Collapse the current space to one visible leader plus a background pool.",
     )
 
+    subparsers.add_parser(
+        "float",
+        help="Convert the current tracked space to float layout and suspend workflow tracking there.",
+    )
+
     split_parser = subparsers.add_parser(
         "split",
         help="Split the current leader tile or arm a pending split.",
@@ -144,6 +149,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.command == "reseed":
             runtime.reseed()
+        elif args.command == "float":
+            runtime.float_space()
         elif args.command == "split":
             runtime.split(args.direction)
         elif args.command == "signal":

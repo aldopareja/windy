@@ -48,6 +48,37 @@ class WorkflowRuntime:
         self._yabai = yabai
         self._state_store = state_store
 
+    def float_space(self) -> None:
+        state = self._state_store.read()
+        focused_window = _query_focused_window_record_or_none(self._yabai)
+        if focused_window is None:
+            return
+
+        workflow_space = derive_workflow_space_from_window(
+            focused_window,
+            description="focused window",
+        )
+        if not _validate_float_space_or_none(self._yabai, workflow_space=workflow_space):
+            return
+
+        if not is_eligible_window(
+            focused_window,
+            target_display=workflow_space.display,
+            target_space=workflow_space.space,
+        ):
+            return
+
+        if workflow_space.storage_key not in state.spaces:
+            return
+
+        self._yabai.set_space_layout(workflow_space.space, "float")
+        self._state_store.write(
+            _clear_space_runtime_state(
+                _delete_space_state(state, workflow_space.storage_key),
+                workflow_space=workflow_space,
+            )
+        )
+
     def reseed(self) -> None:
         state = self._state_store.read()
         target = resolve_current_space_target(
@@ -580,6 +611,22 @@ def _delete_space_state(state: RuntimeState, storage_key: str) -> RuntimeState:
     return replace(state, spaces=next_spaces)
 
 
+def _clear_space_runtime_state(
+    state: RuntimeState,
+    *,
+    workflow_space,
+) -> RuntimeState:
+    next_state = state
+    if (
+        next_state.alttab_session is not None
+        and next_state.alttab_session.origin_workflow_space == workflow_space
+    ):
+        next_state = replace(next_state, alttab_session=None)
+    if next_state.focus_guard is not None and next_state.focus_guard.workflow_space == workflow_space:
+        next_state = replace(next_state, focus_guard=None)
+    return next_state
+
+
 def _filter_window_ids(
     window_ids: Iterable[int],
     *,
@@ -656,3 +703,25 @@ def _query_recent_window_or_none(yabai: YabaiClient) -> Optional[dict[str, Any]]
         )
     except WorkflowError:
         return None
+
+
+def _query_focused_window_record_or_none(yabai: YabaiClient) -> Optional[dict[str, Any]]:
+    try:
+        return query_focused_window_record(
+            yabai,
+            description="focused window",
+        )
+    except WorkflowError:
+        return None
+
+
+def _validate_float_space_or_none(yabai: YabaiClient, *, workflow_space) -> bool:
+    try:
+        validate_workflow_space(
+            yabai,
+            workflow_space=workflow_space,
+            allowed_layouts=("bsp", "stack", "float"),
+        )
+    except WorkflowError:
+        return False
+    return True
