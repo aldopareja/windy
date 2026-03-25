@@ -512,17 +512,29 @@ class WorkflowRuntime:
             self._state_store.write(replace(state, focus_guard=None))
             return
 
-        resolved = self._resolve_managed_signal_space(
-            state,
-            event=event,
-            window_id=window_id,
-            current_workflow_space=current_workflow_space,
-            current_window_is_eligible=current_window_is_eligible,
-        )
-        if resolved is None:
-            return
+        move_arrival = None
+        if event == "window_moved":
+            move_arrival = self._resolve_window_moved_arrival_space(
+                state,
+                window_id=window_id,
+                current_workflow_space=current_workflow_space,
+                current_window_is_eligible=current_window_is_eligible,
+            )
+        treat_as_arrival = move_arrival is not None
+        if move_arrival is not None:
+            managed, workflow_space = move_arrival
+        else:
+            resolved = self._resolve_managed_signal_space(
+                state,
+                event=event,
+                window_id=window_id,
+                current_workflow_space=current_workflow_space,
+                current_window_is_eligible=current_window_is_eligible,
+            )
+            if resolved is None:
+                return
+            managed, workflow_space = resolved
 
-        managed, workflow_space = resolved
         eligible_windows = query_eligible_windows(
             self._yabai,
             workflow_space=workflow_space,
@@ -531,7 +543,7 @@ class WorkflowRuntime:
             managed,
             eligible_windows,
         )
-        if event == "window_focused" or event in ARRIVAL_EVENTS:
+        if treat_as_arrival or event == "window_focused" or event in ARRIVAL_EVENTS:
             working = self._apply_arrival_batch(
                 state,
                 workflow_space=workflow_space,
@@ -555,6 +567,23 @@ class WorkflowRuntime:
 
         next_state = replace(state, focus_guard=None) if event == "window_focused" else state
         self._write_reconciled_space(next_state, working)
+
+    def _resolve_window_moved_arrival_space(
+        self,
+        state: RuntimeState,
+        *,
+        window_id: int,
+        current_workflow_space,
+        current_window_is_eligible: bool,
+    ) -> Optional[tuple[ManagedSpaceState, Any]]:
+        if not current_window_is_eligible or current_workflow_space is None:
+            return None
+        managed = state.spaces.get(current_workflow_space.storage_key)
+        if managed is None:
+            return None
+        if _find_space_and_tile_for_window(state, window_id) is not None:
+            return None
+        return managed, current_workflow_space
 
     def _resolve_managed_signal_space(
         self,
