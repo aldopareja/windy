@@ -12,7 +12,7 @@ def _bootstrap() -> None:
 
 _bootstrap()
 
-from yhwm.cli import main
+from windy.cli import main
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class RuntimeStateStore:
     @staticmethod
     def default_path() -> Path:
         runtime_root = Path(__file__).resolve().parents[1]
-        return runtime_root / "state" / "yhwm-state-v4.json"
+        return runtime_root / "state" / "windy-state.json"
 
     def read(self) -> RuntimeState:
         if not self._path.exists():
@@ -37,7 +37,7 @@ class RuntimeStateStore:
 
     def write(self, state: RuntimeState) -> None:
         payload = {
-            "schema_version": 4,
+            "schema_version": 1,
             "spaces": {
                 storage_key: {
                     "display": tracked.workflow_space.display,
@@ -81,7 +81,7 @@ class RuntimeStateStore:
         if not isinstance(payload, dict):
             return RuntimeState.empty()
 
-        if payload.get("schema_version") != 4:
+        if payload.get("schema_version") != 1:
             return RuntimeState.empty()
 
         raw_spaces = payload.get("spaces")

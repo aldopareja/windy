@@ -5,25 +5,28 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from yhwm import cli as cli_module
-from yhwm.errors import WorkflowError
-from yhwm.hammerspoon import SubprocessHammerspoonClient
-from yhwm.integration import INIT_BLOCK_END, INIT_BLOCK_START, install_hammerspoon
-from yhwm.models import EligibleWorkflowSpace, NormalizedFrame, PendingSplit, RuntimeState, TrackedSpaceState
-from yhwm.state import RuntimeStateStore
-from yhwm.workflow import WorkflowRuntime
-from yhwm.yabai import SubprocessYabaiClient
+from windy import cli as cli_module
+from windy.errors import WorkflowError
+from windy.hammerspoon import SubprocessHammerspoonClient
+from windy.integration import INIT_BLOCK_END, INIT_BLOCK_START, install_hammerspoon
+from windy.models import EligibleWorkflowSpace, NormalizedFrame, PendingSplit, RuntimeState, TrackedSpaceState
+from windy.state import RuntimeStateStore
+from windy.workflow import WorkflowRuntime
+from windy.yabai import SubprocessYabaiClient
 
 
 class RuntimeStateStoreTests(unittest.TestCase):
     def test_read_ignores_old_schema_and_returns_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "state.json"
-            path.write_text('{"schema_version": 3, "spaces": {}}\n', encoding="utf-8")
+            path.write_text('{"schema_version": 4, "spaces": {}}\n', encoding="utf-8")
 
             state = RuntimeStateStore(path).read()
 
             self.assertEqual(state, RuntimeState.empty())
+
+    def test_default_path_uses_windy_state_name(self) -> None:
+        self.assertEqual(RuntimeStateStore.default_path().name, "windy-state.json")
 
     def test_write_and_read_round_trip_pending_split(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -392,20 +395,18 @@ class CliTests(unittest.TestCase):
     def test_install_hammerspoon_dispatches_install(self) -> None:
         with patch.object(cli_module, "SubprocessYabaiClient", return_value=object()):
             with patch.object(cli_module, "SubprocessHammerspoonClient", return_value=object()):
-                with patch.object(cli_module, "remove_legacy_yabai_signals") as remove_signals:
-                    with patch.object(cli_module, "install_hammerspoon") as install:
-                        result = cli_module.main(["install", "hammerspoon"])
+                with patch.object(cli_module, "install_hammerspoon") as install:
+                    result = cli_module.main(["install", "hammerspoon"])
 
         self.assertEqual(result, 0)
-        remove_signals.assert_called_once()
         install.assert_called_once()
 
 
 class IntegrationInstallTests(unittest.TestCase):
-    def test_install_hammerspoon_replaces_legacy_and_new_blocks_idempotently(self) -> None:
+    def test_install_hammerspoon_only_manages_windy_block_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             runtime_root = Path(tempdir) / "runtime"
-            module_path = runtime_root / "hammerspoon" / "yhwm.lua"
+            module_path = runtime_root / "hammerspoon" / "windy.lua"
             module_path.parent.mkdir(parents=True)
             module_path.write_text("return {}\n", encoding="utf-8")
 
@@ -423,20 +424,21 @@ class IntegrationInstallTests(unittest.TestCase):
                 with patch("subprocess.run", return_value=CompletedProcessStub(0)):
                     install_hammerspoon(
                         runtime_root=runtime_root,
-                        executable_path="/tmp/runtime/bin/yhwm",
+                        executable_path="/tmp/runtime/bin/windy",
                         hs_bin="/opt/homebrew/bin/hs",
                     )
                     install_hammerspoon(
                         runtime_root=runtime_root,
-                        executable_path="/tmp/runtime/bin/yhwm",
+                        executable_path="/tmp/runtime/bin/windy",
                         hs_bin="/opt/homebrew/bin/hs",
                     )
 
             final_text = init_path.read_text(encoding="utf-8")
             self.assertEqual(final_text.count(INIT_BLOCK_START), 1)
             self.assertEqual(final_text.count(INIT_BLOCK_END), 1)
-            self.assertNotIn("BEGIN YHWM_RUNTIME_V2", final_text)
-            self.assertIn("/tmp/runtime/bin/yhwm", final_text)
+            self.assertIn("BEGIN YHWM_RUNTIME_V2", final_text)
+            self.assertIn("BEGIN YHWM_RUNTIME", final_text)
+            self.assertIn("/tmp/runtime/bin/windy", final_text)
 
 
 class SubprocessHammerspoonClientTests(unittest.TestCase):
@@ -515,7 +517,6 @@ class FakeYabaiClient:
         self._layout_by_space = layout_by_space or {}
         self._directional_focus_targets = directional_focus_targets or {}
         self.actions: list[tuple] = []
-        self.signal_actions: list[tuple] = []
 
     def get_config(self, setting: str, *, space: int | None = None) -> str:
         if setting == "focus_follows_mouse":
@@ -580,9 +581,6 @@ class FakeYabaiClient:
 
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         self.actions.append(("swap", window_id, target_window_id))
-
-    def remove_signal(self, signal_selector: str) -> None:
-        self.signal_actions.append(("remove_signal", signal_selector))
 
     def _set_focus(self, window_id: int) -> None:
         self._focused_window_id = window_id

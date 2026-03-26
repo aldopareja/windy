@@ -5,10 +5,9 @@ from pathlib import Path
 import subprocess
 
 from .errors import WorkflowError
-from .yabai import YabaiClient
 
-INIT_BLOCK_START = "-- BEGIN YHWM_RUNTIME_BLOCK"
-INIT_BLOCK_END = "-- END YHWM_RUNTIME_BLOCK"
+INIT_BLOCK_START = "-- BEGIN WINDY_RUNTIME_BLOCK"
+INIT_BLOCK_END = "-- END WINDY_RUNTIME_BLOCK"
 
 
 def install_hammerspoon(
@@ -17,7 +16,7 @@ def install_hammerspoon(
     executable_path: str,
     hs_bin: str,
 ) -> None:
-    module_path = runtime_root / "hammerspoon" / "yhwm.lua"
+    module_path = runtime_root / "hammerspoon" / "windy.lua"
     if not module_path.exists():
         raise WorkflowError(f"Hammerspoon module is missing: {module_path}")
 
@@ -43,11 +42,11 @@ def install_hammerspoon(
     block = "\n".join(
         [
             INIT_BLOCK_START,
-            f'local ok, yhwm = pcall(dofile, {_lua_string(str(module_path))})',
+            f'local ok, windy = pcall(dofile, {_lua_string(str(module_path))})',
             "if not ok then",
-            '  print("yhwm load failed: " .. tostring(yhwm))',
+            '  print("windy load failed: " .. tostring(windy))',
             "else",
-            f"  yhwm.start({{ yhwm_path = {_lua_string(executable_path)} }})",
+            f"  windy.start({{ windy_path = {_lua_string(executable_path)} }})",
             "end",
             INIT_BLOCK_END,
         ]
@@ -76,21 +75,13 @@ def install_hammerspoon(
 
 
 def _strip_managed_block(text: str) -> str:
-    block_markers = [
-        (INIT_BLOCK_START, INIT_BLOCK_END),
-        ("-- BEGIN YHWM_RUNTIME_V2", "-- END YHWM_RUNTIME_V2"),
-        ("-- BEGIN YHWM_RUNTIME", "-- END YHWM_RUNTIME"),
-    ]
-    result = text
-    for start_marker, end_marker in block_markers:
-        if start_marker not in result or end_marker not in result:
-            continue
-        start_index = result.index(start_marker)
-        end_index = result.index(end_marker) + len(end_marker)
-        prefix = result[:start_index].rstrip()
-        suffix = result[end_index:].lstrip()
-        result = prefix + ("\n\n" if prefix and suffix else "") + suffix
-    return result
+    if INIT_BLOCK_START not in text or INIT_BLOCK_END not in text:
+        return text
+    start_index = text.index(INIT_BLOCK_START)
+    end_index = text.index(INIT_BLOCK_END) + len(INIT_BLOCK_END)
+    prefix = text[:start_index].rstrip()
+    suffix = text[end_index:].lstrip()
+    return prefix + ("\n\n" if prefix and suffix else "") + suffix
 
 
 def _lua_string(value: str) -> str:
@@ -100,18 +91,3 @@ def _lua_string(value: str) -> str:
 def _is_expected_hammerspoon_reload_transport_error(detail: str) -> bool:
     lowered = detail.lower()
     return "message port was invalidated" in lowered
-
-
-def remove_legacy_yabai_signals(*, yabai: YabaiClient) -> None:
-    for label in (
-        "yhwm_v2_window_focused",
-        "yhwm_v2_window_created",
-        "yhwm_v2_window_deminimized",
-        "yhwm_v2_window_moved",
-        "yhwm_v2_window_minimized",
-        "yhwm_v2_window_destroyed",
-    ):
-        try:
-            yabai.remove_signal(label)
-        except WorkflowError:
-            pass

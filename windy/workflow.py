@@ -328,7 +328,7 @@ class WorkflowRuntime:
 
         if require_tracked and tracked is None:
             if raise_if_untracked:
-                raise WorkflowError("Current space is not tracked. Run `yhwm reseed` first.")
+                raise WorkflowError("Current space is not tracked. Run `windy reseed` first.")
             return None
 
         return _CurrentContext(

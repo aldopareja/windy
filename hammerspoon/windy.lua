@@ -1,6 +1,6 @@
 local module = {}
 
-local runtimeState = _G.__yhwm_runtime_v4
+local runtimeState = _G.__windy_runtime
 
 local function stopExisting()
   if runtimeState == nil then
@@ -37,13 +37,13 @@ local function defaultErrorHandler(exitCode, _, stdErr)
   end
   local message = stdErr
   if message == nil or message == "" then
-    message = "yhwm command failed"
+    message = "windy command failed"
   end
   hs.alert.show(message, 1.5)
 end
 
-local function runYhwm(state, args, onExit)
-  local task = hs.task.new(state.yhwmPath, function(exitCode, stdOut, stdErr)
+local function runWindy(state, args, onExit)
+  local task = hs.task.new(state.windyPath, function(exitCode, stdOut, stdErr)
     if onExit ~= nil then
       onExit(exitCode, stdOut, stdErr)
       return
@@ -52,7 +52,7 @@ local function runYhwm(state, args, onExit)
   end, args)
 
   if task == nil then
-    hs.alert.show("failed to launch yhwm", 1.5)
+    hs.alert.show("failed to launch windy", 1.5)
     return
   end
   task:start()
@@ -142,7 +142,7 @@ local function queueAltTabCommit(state)
     if selectedMeta.visible then
       table.insert(args, "--selected-was-visible-at-open")
     end
-    runYhwm(state, args)
+    runWindy(state, args)
   end)
 end
 
@@ -150,39 +150,39 @@ function module.start(config)
   stopExisting()
 
   local state = {
-    yhwmPath = config.yhwm_path,
+    windyPath = config.windy_path,
     alttabSession = nil,
     releaseTimer = nil,
     hotkeys = {},
   }
-  _G.__yhwm_runtime_v4 = state
+  _G.__windy_runtime = state
 
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "space", function()
-    runYhwm(state, {"reseed"})
+    runWindy(state, {"reseed"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "f", function()
-    runYhwm(state, {"float"})
+    runWindy(state, {"float"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "d", function()
-    runYhwm(state, {"delete-tile"})
+    runWindy(state, {"delete-tile"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "left", function()
-    runYhwm(state, {"navigate", "--direction", "west"})
+    runWindy(state, {"navigate", "--direction", "west"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "right", function()
-    runYhwm(state, {"navigate", "--direction", "east"})
+    runWindy(state, {"navigate", "--direction", "east"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "up", function()
-    runYhwm(state, {"navigate", "--direction", "north"})
+    runWindy(state, {"navigate", "--direction", "north"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "down", function()
-    runYhwm(state, {"navigate", "--direction", "south"})
+    runWindy(state, {"navigate", "--direction", "south"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "h", function()
-    runYhwm(state, {"split", "--direction", "south"})
+    runWindy(state, {"split", "--direction", "south"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "v", function()
-    runYhwm(state, {"split", "--direction", "east"})
+    runWindy(state, {"split", "--direction", "east"})
   end))
 
   state.keyDownTap = hs.eventtap.new({hs.eventtap.event.types.keyDown}, function(event)

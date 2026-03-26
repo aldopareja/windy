@@ -9,7 +9,7 @@ from typing import Optional, Sequence
 
 from .errors import WorkflowError
 from .hammerspoon import SubprocessHammerspoonClient
-from .integration import install_hammerspoon, remove_legacy_yabai_signals
+from .integration import install_hammerspoon
 from .models import NormalizedFrame
 from .state import RuntimeStateStore
 from .workflow import SUPPORTED_NAVIGATION_DIRECTIONS, SUPPORTED_SPLIT_DIRECTIONS, WorkflowRuntime
@@ -18,13 +18,13 @@ from .yabai import SubprocessYabaiClient
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="yhwm",
-        description="Live-derived workflow runtime for the current yabai/Hammerspoon workflow.",
+        prog="windy",
+        description="Window workflow for yabai and Hammerspoon.",
     )
     parser.add_argument(
         "--state-file",
         default=str(RuntimeStateStore.default_path()),
-        help="State file path. Defaults to runtime/state/yhwm-state-v4.json.",
+        help="State file path. Defaults to runtime/state/windy-state.json.",
     )
     parser.add_argument(
         "--yabai-bin",
@@ -133,9 +133,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 selected_was_visible_at_open=bool(args.selected_was_visible_at_open),
             )
         elif args.command == "install":
-            executable_path = str(Path(__file__).resolve().parents[1] / "bin" / "yhwm")
+            executable_path = str(Path(__file__).resolve().parents[1] / "bin" / "windy")
             if args.install_command == "hammerspoon":
-                remove_legacy_yabai_signals(yabai=yabai)
                 install_hammerspoon(
                     runtime_root=Path(__file__).resolve().parents[1],
                     executable_path=executable_path,
