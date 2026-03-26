@@ -2,60 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shlex
 import subprocess
 
 from .errors import WorkflowError
 from .yabai import YabaiClient
 
-YABAI_SIGNAL_PREFIX = "yhwm_v2_"
-INIT_BLOCK_START = "-- BEGIN YHWM_RUNTIME_V2"
-INIT_BLOCK_END = "-- END YHWM_RUNTIME_V2"
-
-
-def install_yabai_signals(*, yabai: YabaiClient, executable_path: str) -> None:
-    for label in _signal_labels():
-        try:
-            yabai.remove_signal(label)
-        except WorkflowError:
-            pass
-
-    quoted_executable = shlex.quote(executable_path)
-    signal_specs = [
-        (
-            "window_focused",
-            f'{quoted_executable} signal focus --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_focused",
-        ),
-        (
-            "window_created",
-            f'{quoted_executable} signal window --event window_created --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_created",
-        ),
-        (
-            "window_deminimized",
-            f'{quoted_executable} signal window --event window_deminimized --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_deminimized",
-        ),
-        (
-            "window_moved",
-            f'{quoted_executable} signal window --event window_moved --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_moved",
-        ),
-        (
-            "window_minimized",
-            f'{quoted_executable} signal window --event window_minimized --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_minimized",
-        ),
-        (
-            "window_destroyed",
-            f'{quoted_executable} signal window --event window_destroyed --window-id "$YABAI_WINDOW_ID"',
-            f"{YABAI_SIGNAL_PREFIX}window_destroyed",
-        ),
-    ]
-
-    for event, action, label in signal_specs:
-        yabai.add_signal(event=event, action=action, label=label)
+INIT_BLOCK_START = "-- BEGIN YHWM_RUNTIME_BLOCK"
+INIT_BLOCK_END = "-- END YHWM_RUNTIME_BLOCK"
 
 
 def install_hammerspoon(
@@ -122,27 +75,22 @@ def install_hammerspoon(
         raise WorkflowError(f"Failed to reload Hammerspoon: {detail}")
 
 
-def _signal_labels() -> list[str]:
-    return [
-        f"{YABAI_SIGNAL_PREFIX}window_focused",
-        f"{YABAI_SIGNAL_PREFIX}window_created",
-        f"{YABAI_SIGNAL_PREFIX}window_deminimized",
-        f"{YABAI_SIGNAL_PREFIX}window_moved",
-        f"{YABAI_SIGNAL_PREFIX}window_minimized",
-        f"{YABAI_SIGNAL_PREFIX}window_destroyed",
-    ]
-
-
 def _strip_managed_block(text: str) -> str:
-    if INIT_BLOCK_START not in text or INIT_BLOCK_END not in text:
-        return text
-    start_index = text.index(INIT_BLOCK_START)
-    end_index = text.index(INIT_BLOCK_END) + len(INIT_BLOCK_END)
-    prefix = text[:start_index].rstrip()
-    suffix = text[end_index:].lstrip()
-    if prefix and suffix:
-        return prefix + "\n\n" + suffix
-    return prefix or suffix
+    block_markers = [
+        (INIT_BLOCK_START, INIT_BLOCK_END),
+        ("-- BEGIN YHWM_RUNTIME_V2", "-- END YHWM_RUNTIME_V2"),
+        ("-- BEGIN YHWM_RUNTIME", "-- END YHWM_RUNTIME"),
+    ]
+    result = text
+    for start_marker, end_marker in block_markers:
+        if start_marker not in result or end_marker not in result:
+            continue
+        start_index = result.index(start_marker)
+        end_index = result.index(end_marker) + len(end_marker)
+        prefix = result[:start_index].rstrip()
+        suffix = result[end_index:].lstrip()
+        result = prefix + ("\n\n" if prefix and suffix else "") + suffix
+    return result
 
 
 def _lua_string(value: str) -> str:
@@ -151,7 +99,19 @@ def _lua_string(value: str) -> str:
 
 def _is_expected_hammerspoon_reload_transport_error(detail: str) -> bool:
     lowered = detail.lower()
-    return (
-        "message port was invalidated" in lowered
-        or "transport errors are normal if hammerspoon is reloading" in lowered
-    )
+    return "message port was invalidated" in lowered
+
+
+def remove_legacy_yabai_signals(*, yabai: YabaiClient) -> None:
+    for label in (
+        "yhwm_v2_window_focused",
+        "yhwm_v2_window_created",
+        "yhwm_v2_window_deminimized",
+        "yhwm_v2_window_moved",
+        "yhwm_v2_window_minimized",
+        "yhwm_v2_window_destroyed",
+    ):
+        try:
+            yabai.remove_signal(label)
+        except WorkflowError:
+            pass

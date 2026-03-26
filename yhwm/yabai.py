@@ -47,10 +47,10 @@ class YabaiClient(Protocol):
     def focus_window(self, window_id: int) -> None:
         ...
 
-    def swap_window(self, window_id: int, target_window_id: int) -> None:
+    def focus_window_direction(self, direction: str) -> None:
         ...
 
-    def add_signal(self, event: str, action: str, label: str) -> None:
+    def swap_window(self, window_id: int, target_window_id: int) -> None:
         ...
 
     def remove_signal(self, signal_selector: str) -> None:
@@ -174,6 +174,17 @@ class SubprocessYabaiClient:
             error_context=f"Failed to refocus window {window_id} after workflow mutation",
         )
 
+    def focus_window_direction(self, direction: str) -> None:
+        try:
+            self._run_text(
+                ["-m", "window", "--focus", direction],
+                error_context=f"Failed to focus a {direction} workflow neighbor",
+            )
+        except WorkflowError as exc:
+            if _is_missing_directional_focus_error(str(exc)):
+                return
+            raise
+
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         self._run_text(
             ["-m", "window", str(window_id), "--swap", str(target_window_id)],
@@ -181,19 +192,6 @@ class SubprocessYabaiClient:
                 "Failed to swap visible workflow windows "
                 f"{window_id} and {target_window_id}"
             ),
-        )
-
-    def add_signal(self, event: str, action: str, label: str) -> None:
-        self._run_text(
-            [
-                "-m",
-                "signal",
-                "--add",
-                f"event={event}",
-                f"action={action}",
-                f"label={label}",
-            ],
-            error_context=f"Failed to add yabai signal '{label}'",
         )
 
     def remove_signal(self, signal_selector: str) -> None:
@@ -239,3 +237,16 @@ def _expect_single_entity(payload: Any, description: str) -> Any:
             raise WorkflowError(f"Expected yabai to return exactly one {description}.")
         return payload[0]
     return payload
+
+
+def _is_missing_directional_focus_error(message: str) -> bool:
+    lowered = message.strip().lower()
+    return any(
+        detail in lowered
+        for detail in (
+            "could not locate a northward managed window.",
+            "could not locate a eastward managed window.",
+            "could not locate a southward managed window.",
+            "could not locate a westward managed window.",
+        )
+    )

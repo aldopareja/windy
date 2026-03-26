@@ -8,26 +8,23 @@ import sys
 from typing import Optional, Sequence
 
 from .errors import WorkflowError
-from .integration import install_hammerspoon, install_yabai_signals
+from .hammerspoon import SubprocessHammerspoonClient
+from .integration import install_hammerspoon, remove_legacy_yabai_signals
+from .models import NormalizedFrame
 from .state import RuntimeStateStore
-from .workflow import (
-    SUPPORTED_ALTTAB_CANCEL_REASONS,
-    SUPPORTED_SIGNAL_WINDOW_EVENTS,
-    SUPPORTED_SPLIT_DIRECTIONS,
-    WorkflowRuntime,
-)
+from .workflow import SUPPORTED_NAVIGATION_DIRECTIONS, SUPPORTED_SPLIT_DIRECTIONS, WorkflowRuntime
 from .yabai import SubprocessYabaiClient
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="yhwm",
-        description="Single-binary v2 runtime for the current yabai/Hammerspoon workflow.",
+        description="Live-derived workflow runtime for the current yabai/Hammerspoon workflow.",
     )
     parser.add_argument(
         "--state-file",
         default=str(RuntimeStateStore.default_path()),
-        help="State file path. Defaults to runtime/state/yhwm-state-v3.json.",
+        help="State file path. Defaults to runtime/state/yhwm-state-v4.json.",
     )
     parser.add_argument(
         "--yabai-bin",
@@ -44,22 +41,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     subparsers.add_parser(
         "reseed",
-        help="Collapse the current space to one visible leader plus a background pool.",
+        help="Collapse the current space to one visible leader plus background stacks.",
     )
-
     subparsers.add_parser(
         "float",
-        help="Convert the current tracked space to float layout and suspend workflow tracking there.",
+        help="Convert the current tracked space to float layout and stop tracking it.",
     )
-
     subparsers.add_parser(
         "delete-tile",
-        help="Remove the focused tile by sending its window back to the background pool.",
+        help="Merge the focused live tile back into another visible tile.",
+    )
+
+    navigate_parser = subparsers.add_parser(
+        "navigate",
+        help="Focus a visible neighbor in the requested direction.",
+    )
+    navigate_parser.add_argument(
+        "--direction",
+        required=True,
+        choices=sorted(SUPPORTED_NAVIGATION_DIRECTIONS),
+        help="Navigation direction: north, east, south, or west.",
     )
 
     split_parser = subparsers.add_parser(
         "split",
-        help="Split the current leader tile or arm a pending split.",
+        help="Split the focused live tile or arm the next split.",
     )
     split_parser.add_argument(
         "--direction",
@@ -68,78 +74,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Split direction: east for left/right, south for top/bottom.",
     )
 
-    signal_parser = subparsers.add_parser(
-        "signal",
-        help="Handle live yabai signals.",
-    )
-    signal_subparsers = signal_parser.add_subparsers(dest="signal_command", required=True)
-
-    signal_focus = signal_subparsers.add_parser(
-        "focus",
-        help="Handle a yabai window_focused signal.",
-    )
-    signal_focus.add_argument(
-        "--window-id",
-        default=os.environ.get("YABAI_WINDOW_ID"),
-        help="Focused window id. Defaults to YABAI_WINDOW_ID.",
-    )
-
-    signal_window = signal_subparsers.add_parser(
-        "window",
-        help="Handle a yabai window lifecycle signal.",
-    )
-    signal_window.add_argument(
-        "--event",
-        required=True,
-        choices=sorted(SUPPORTED_SIGNAL_WINDOW_EVENTS),
-        help="Window lifecycle event.",
-    )
-    signal_window.add_argument(
-        "--window-id",
-        default=os.environ.get("YABAI_WINDOW_ID"),
-        help="Window id. Defaults to YABAI_WINDOW_ID.",
-    )
-
     alttab_parser = subparsers.add_parser(
         "alttab",
-        help="Handle the AltTab workflow boundary.",
+        help="Commit an Alt-Tab selection against the live topology.",
     )
-    alttab_subparsers = alttab_parser.add_subparsers(dest="alttab_command", required=True)
-    alttab_subparsers.add_parser("open", help="Arm an AltTab session from the current leader.")
-
-    alttab_release = alttab_subparsers.add_parser(
-        "release",
-        help="Commit an AltTab session using the finally focused window.",
-    )
-    alttab_release.add_argument(
-        "--window-id",
-        help="Focused window id after AltTab closes. Falls back to the current focus query.",
-    )
-
-    alttab_cancel = alttab_subparsers.add_parser(
-        "cancel",
-        help="Cancel an AltTab session.",
-    )
-    alttab_cancel.add_argument(
-        "--reason",
+    alttab_parser.add_argument("--origin-window-id", required=True, help="Focused window id when Alt-Tab opened.")
+    alttab_parser.add_argument("--selected-window-id", required=True, help="Focused window id after Alt-Tab closed.")
+    alttab_parser.add_argument(
+        "--origin-open-frame",
         required=True,
-        choices=sorted(SUPPORTED_ALTTAB_CANCEL_REASONS),
-        help="Cancellation reason.",
+        help="Origin tile frame at chooser open as x,y,w,h.",
     )
-    alttab_cancel.add_argument(
-        "--window-id",
-        help="Optional focused window id to guard the next follow-on focus signal.",
+    alttab_parser.add_argument(
+        "--selected-open-frame",
+        required=True,
+        help="Selected window frame at chooser open as x,y,w,h.",
+    )
+    alttab_parser.add_argument(
+        "--selected-was-visible-at-open",
+        action="store_true",
+        help="Whether the selected window was the frontmost member of its frame group when Alt-Tab opened.",
     )
 
     install_parser = subparsers.add_parser(
         "install",
-        help="Install live integration hooks.",
+        help="Install the repo-managed Hammerspoon loader and reload Hammerspoon.",
     )
     install_subparsers = install_parser.add_subparsers(dest="install_command", required=True)
-    install_subparsers.add_parser(
-        "yabai-signals",
-        help="Install the repo-managed yabai signals for v2.",
-    )
     install_subparsers.add_parser(
         "hammerspoon",
         help="Install the repo-managed Hammerspoon loader and reload Hammerspoon.",
@@ -149,7 +110,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     state_store = RuntimeStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
-    runtime = WorkflowRuntime(yabai=yabai, state_store=state_store)
+    hammerspoon = SubprocessHammerspoonClient(args.hs_bin)
+    runtime = WorkflowRuntime(yabai=yabai, hammerspoon=hammerspoon, state_store=state_store)
 
     try:
         if args.command == "reseed":
@@ -158,36 +120,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             runtime.float_space()
         elif args.command == "delete-tile":
             runtime.delete_tile()
+        elif args.command == "navigate":
+            runtime.navigate(args.direction)
         elif args.command == "split":
             runtime.split(args.direction)
-        elif args.command == "signal":
-            if args.signal_command == "focus":
-                runtime.handle_focus(_parse_window_id("signal focus", args.window_id))
-            else:
-                runtime.handle_window_event(
-                    event=args.event,
-                    window_id=_parse_window_id("signal window", args.window_id),
-                )
         elif args.command == "alttab":
-            if args.alttab_command == "open":
-                runtime.alttab_open()
-            elif args.alttab_command == "release":
-                runtime.alttab_release(_parse_optional_window_id(args.window_id))
-            else:
-                runtime.alttab_cancel(
-                    reason=args.reason,
-                    window_id=_parse_optional_window_id(args.window_id),
-                )
+            runtime.alttab(
+                origin_window_id=_parse_window_id("alttab", args.origin_window_id),
+                selected_window_id=_parse_window_id("alttab", args.selected_window_id),
+                origin_open_frame=_parse_frame(args.origin_open_frame),
+                selected_open_frame=_parse_frame(args.selected_open_frame),
+                selected_was_visible_at_open=bool(args.selected_was_visible_at_open),
+            )
         elif args.command == "install":
             executable_path = str(Path(__file__).resolve().parents[1] / "bin" / "yhwm")
-            if args.install_command == "yabai-signals":
-                install_yabai_signals(yabai=yabai, executable_path=executable_path)
-            else:
+            if args.install_command == "hammerspoon":
+                remove_legacy_yabai_signals(yabai=yabai)
                 install_hammerspoon(
                     runtime_root=Path(__file__).resolve().parents[1],
                     executable_path=executable_path,
                     hs_bin=args.hs_bin,
                 )
+            else:
+                raise WorkflowError(f"Unsupported install command: {args.install_command}")
         else:
             raise WorkflowError(f"Unsupported command: {args.command}")
     except WorkflowError as exc:
@@ -199,30 +154,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 def _parse_window_id(command_name: str, raw_value: object) -> int:
     if not isinstance(raw_value, str) or not raw_value.strip():
-        raise WorkflowError(
-            f"{command_name} requires --window-id or YABAI_WINDOW_ID to be set."
-        )
+        raise WorkflowError(f"{command_name} requires a positive integer window id.")
     try:
         window_id = int(raw_value)
     except ValueError as exc:
-        raise WorkflowError(f"{command_name} requires an integer window id.") from exc
+        raise WorkflowError(f"{command_name} requires a positive integer window id.") from exc
     if window_id <= 0:
         raise WorkflowError(f"{command_name} requires a positive integer window id.")
     return window_id
 
 
-def _parse_optional_window_id(raw_value: object) -> Optional[int]:
-    if raw_value is None:
-        return None
-    if not isinstance(raw_value, str) or not raw_value.strip():
-        return None
+def _parse_frame(raw_value: object) -> NormalizedFrame:
+    if not isinstance(raw_value, str):
+        raise WorkflowError("Expected a frame string formatted as x,y,w,h.")
+    parts = [part.strip() for part in raw_value.split(",")]
+    if len(parts) != 4:
+        raise WorkflowError("Expected a frame string formatted as x,y,w,h.")
     try:
-        window_id = int(raw_value)
+        x, y, w, h = (int(part) for part in parts)
     except ValueError as exc:
-        raise WorkflowError("Expected --window-id to be an integer.") from exc
-    if window_id <= 0:
-        raise WorkflowError("Expected --window-id to be a positive integer.")
-    return window_id
+        raise WorkflowError("Expected a frame string formatted as x,y,w,h.") from exc
+    if w <= 0 or h <= 0:
+        raise WorkflowError("Expected a frame string formatted as x,y,w,h.")
+    return NormalizedFrame(x=x, y=y, w=w, h=h)
 
 
 def _default_executable_path(name: str) -> str:

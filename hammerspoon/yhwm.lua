@@ -1,6 +1,6 @@
 local module = {}
 
-local runtimeState = _G.__yhwm_runtime_v2
+local runtimeState = _G.__yhwm_runtime_v4
 
 local function stopExisting()
   if runtimeState == nil then
@@ -12,9 +12,6 @@ local function stopExisting()
   end
   if runtimeState.flagsTap ~= nil then
     runtimeState.flagsTap:stop()
-  end
-  if runtimeState.appWatcher ~= nil then
-    runtimeState.appWatcher:stop()
   end
   if runtimeState.releaseTimer ~= nil then
     runtimeState.releaseTimer:stop()
@@ -61,18 +58,92 @@ local function runYhwm(state, args, onExit)
   task:start()
 end
 
-local function cancelSession(state, reason)
-  local args = {"alttab", "cancel", "--reason", reason}
-  local windowId = focusedWindowId()
-  if windowId ~= nil then
-    table.insert(args, "--window-id")
-    table.insert(args, tostring(windowId))
-  end
-  runYhwm(state, args)
-end
-
 local function modifiersAreAltOnly(flags)
   return flags.alt and not flags.cmd and not flags.ctrl and not flags.shift and not flags.fn
+end
+
+local function normalizeFrame(frame)
+  return {
+    x = math.floor(frame.x + 0.5),
+    y = math.floor(frame.y + 0.5),
+    w = math.floor(frame.w + 0.5),
+    h = math.floor(frame.h + 0.5),
+  }
+end
+
+local function frameKey(frame)
+  return string.format("%d,%d,%d,%d", frame.x, frame.y, frame.w, frame.h)
+end
+
+local function captureAltTabSnapshot()
+  local firstByFrame = {}
+  local byWindowId = {}
+
+  for _, win in ipairs(hs.window.orderedWindows()) do
+    local windowId = win:id()
+    if windowId ~= nil then
+      local normalized = normalizeFrame(win:frame())
+      local key = frameKey(normalized)
+      local isVisible = firstByFrame[key] == nil
+      if isVisible then
+        firstByFrame[key] = windowId
+      end
+      byWindowId[windowId] = {
+        frame = normalized,
+        frame_key = key,
+        visible = isVisible,
+      }
+    end
+  end
+
+  return {
+    by_window_id = byWindowId,
+  }
+end
+
+local function clearAltTabSession(state)
+  state.alttabSession = nil
+  if state.releaseTimer ~= nil then
+    state.releaseTimer:stop()
+    state.releaseTimer = nil
+  end
+end
+
+local function queueAltTabCommit(state)
+  local session = state.alttabSession
+  clearAltTabSession(state)
+  if session == nil then
+    return
+  end
+
+  state.releaseTimer = hs.timer.doAfter(0.05, function()
+    local selectedWindowId = focusedWindowId()
+    if selectedWindowId == nil or selectedWindowId == session.origin_window_id then
+      return
+    end
+
+    local originMeta = session.snapshot.by_window_id[session.origin_window_id]
+    local selectedMeta = session.snapshot.by_window_id[selectedWindowId]
+    if originMeta == nil or selectedMeta == nil then
+      return
+    end
+
+    local args = {
+      "alttab",
+      "--origin-window-id",
+      tostring(session.origin_window_id),
+      "--selected-window-id",
+      tostring(selectedWindowId),
+      "--origin-open-frame",
+      originMeta.frame_key,
+      "--selected-open-frame",
+      selectedMeta.frame_key,
+    }
+    if selectedMeta.visible then
+      table.insert(args, "--selected-was-visible-at-open")
+    end
+    runYhwm(state, args)
+  end)
 end
 
 function module.start(config)
@@ -80,11 +151,11 @@ function module.start(config)
 
   local state = {
     yhwmPath = config.yhwm_path,
-    alttabArmed = false,
+    alttabSession = nil,
     releaseTimer = nil,
     hotkeys = {},
   }
-  _G.__yhwm_runtime_v2 = state
+  _G.__yhwm_runtime_v4 = state
 
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "space", function()
     runYhwm(state, {"reseed"})
@@ -94,6 +165,18 @@ function module.start(config)
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "d", function()
     runYhwm(state, {"delete-tile"})
+  end))
+  table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "left", function()
+    runYhwm(state, {"navigate", "--direction", "west"})
+  end))
+  table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "right", function()
+    runYhwm(state, {"navigate", "--direction", "east"})
+  end))
+  table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "up", function()
+    runYhwm(state, {"navigate", "--direction", "north"})
+  end))
+  table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "down", function()
+    runYhwm(state, {"navigate", "--direction", "south"})
   end))
   table.insert(state.hotkeys, hs.hotkey.bind({"ctrl", "alt"}, "h", function()
     runYhwm(state, {"split", "--direction", "south"})
@@ -107,20 +190,28 @@ function module.start(config)
     local flags = event:getFlags()
 
     if keyCode == hs.keycodes.map.tab and modifiersAreAltOnly(flags) then
-      state.alttabArmed = true
-      runYhwm(state, {"alttab", "open"})
+      if state.alttabSession == nil then
+        local originWindowId = focusedWindowId()
+        if originWindowId ~= nil then
+          local snapshot = captureAltTabSnapshot()
+          if snapshot.by_window_id[originWindowId] ~= nil then
+            state.alttabSession = {
+              origin_window_id = originWindowId,
+              snapshot = snapshot,
+            }
+          end
+        end
+      end
       return false
     end
 
-    if state.alttabArmed and keyCode == hs.keycodes.map.escape then
-      state.alttabArmed = false
-      cancelSession(state, "esc")
+    if state.alttabSession ~= nil and keyCode == hs.keycodes.map.escape then
+      clearAltTabSession(state)
       return false
     end
 
-    if state.alttabArmed and keyCode == hs.keycodes.map.space then
-      state.alttabArmed = false
-      cancelSession(state, "space")
+    if state.alttabSession ~= nil and keyCode == hs.keycodes.map.space then
+      clearAltTabSession(state)
       return false
     end
 
@@ -129,57 +220,14 @@ function module.start(config)
 
   state.flagsTap = hs.eventtap.new({hs.eventtap.event.types.flagsChanged}, function(event)
     local flags = event:getFlags()
-    if state.alttabArmed and not flags.alt then
-      state.alttabArmed = false
-      if state.releaseTimer ~= nil then
-        state.releaseTimer:stop()
-      end
-      state.releaseTimer = hs.timer.doAfter(0.05, function()
-        local args = {"alttab", "release"}
-        local windowId = focusedWindowId()
-        if windowId ~= nil then
-          table.insert(args, "--window-id")
-          table.insert(args, tostring(windowId))
-        end
-        runYhwm(state, args)
-      end)
+    if state.alttabSession ~= nil and not flags.alt then
+      queueAltTabCommit(state)
     end
     return false
   end)
 
-  state.appWatcher = hs.application.watcher.new(function(appName, eventType, appObject)
-    local bundleId = nil
-    if appObject ~= nil then
-      bundleId = appObject:bundleID()
-    end
-    if bundleId ~= "com.lwouis.alt-tab-macos" and appName ~= "AltTab" then
-      return
-    end
-    if not state.alttabArmed then
-      return
-    end
-
-    if eventType == hs.application.watcher.deactivated then
-      state.alttabArmed = false
-      cancelSession(state, "chooser_close")
-      return
-    end
-
-    if eventType == hs.application.watcher.hidden then
-      state.alttabArmed = false
-      cancelSession(state, "chooser_hide")
-      return
-    end
-
-    if eventType == hs.application.watcher.terminated then
-      state.alttabArmed = false
-      cancelSession(state, "chooser_quit")
-    end
-  end)
-
   state.keyDownTap:start()
   state.flagsTap:start()
-  state.appWatcher:start()
 end
 
 return module

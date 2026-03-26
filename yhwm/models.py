@@ -15,50 +15,41 @@ class EligibleWorkflowSpace:
 
 
 @dataclass(frozen=True)
-class ManagedTile:
-    tile_id: int
-    visible_window_id: int
-    hidden_window_ids: List[int]
+class NormalizedFrame:
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 @dataclass(frozen=True)
 class PendingSplit:
-    tile_id: int
     direction: str
+    anchor_window_id: int
+    anchor_frame: NormalizedFrame
 
 
 @dataclass(frozen=True)
-class ManagedSpaceState:
+class TrackedSpaceState:
     workflow_space: EligibleWorkflowSpace
-    tiles: Dict[int, ManagedTile]
-    last_focused_tile_id: int
-    next_tile_id: int
     pending_split: Optional[PendingSplit]
 
 
 @dataclass(frozen=True)
-class AltTabSession:
-    origin_window_id: int
-    origin_tile_id: int
-    origin_workflow_space: EligibleWorkflowSpace
-
-
-@dataclass(frozen=True)
-class FocusGuard:
-    workflow_space: EligibleWorkflowSpace
-    target_window_id: Optional[int]
-
-
-@dataclass(frozen=True)
 class RuntimeState:
-    spaces: Dict[str, ManagedSpaceState]
-    alttab_session: Optional[AltTabSession]
-    focus_guard: Optional[FocusGuard]
+    spaces: Dict[str, TrackedSpaceState]
 
     @staticmethod
     def empty() -> "RuntimeState":
-        return RuntimeState(
-            spaces={},
-            alttab_session=None,
-            focus_guard=None,
-        )
+        return RuntimeState(spaces={})
+
+
+@dataclass(frozen=True)
+class LiveTile:
+    frame: NormalizedFrame
+    visible_window_id: int
+    background_window_ids: List[int]
+
+    @property
+    def all_window_ids(self) -> List[int]:
+        return [self.visible_window_id, *self.background_window_ids]
