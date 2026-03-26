@@ -1,6 +1,10 @@
+<img src="assets/readme-demo.gif" alt="Windy demo" width="960">
+
 # Windy
 
-Windy is a small macOS window workflow for yabai + Hammerspoon. It gives you a few keyboard actions for splitting a space, moving between visible tiles, and swapping windows with `opt+tab`.
+Windy is a small macOS window workflow for yabai + Hammerspoon.
+
+Windy helps you keep a space clean and deliberate. Reset the layout, split it into visible tiles, navigate them, and use Alt-Tab to promote the right window.
 
 ## Prerequisites
 
