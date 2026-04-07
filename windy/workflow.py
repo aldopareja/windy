@@ -324,17 +324,22 @@ class WorkflowRuntime:
             return
         focused_window_id = int(focused_window["id"])
 
-        focused_tile = snapshot.tile_for_window(focused_window_id)
-        if focused_tile is None:
+        if focused_window_id == window_id:
+            recent_window = _query_recent_window_or_none(self._yabai)
+            if recent_window is not None:
+                focused_window_id = int(recent_window["id"])
+
+        anchor_tile = snapshot.tile_for_window(focused_window_id)
+        if anchor_tile is None:
             return
 
         new_tile = snapshot.tile_for_window(window_id)
-        already_in_focused_tile = (
-            new_tile is not None and new_tile.frame == focused_tile.frame
+        already_in_anchor_tile = (
+            new_tile is not None and new_tile.frame == anchor_tile.frame
         )
 
-        if not already_in_focused_tile and not pending_split_was_consumed:
-            self._yabai.stack_window(focused_tile.visible_window_id, window_id)
+        if not already_in_anchor_tile and not pending_split_was_consumed:
+            self._yabai.stack_window(anchor_tile.visible_window_id, window_id)
             self._yabai.focus_window(window_id)
             focused_window_id = window_id
 

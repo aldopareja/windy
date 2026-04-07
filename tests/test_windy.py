@@ -465,15 +465,15 @@ class WorkflowRuntimeTests(unittest.TestCase):
             store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
             client = FakeYabaiClient(
                 windows=[
-                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
-                    eligible_window(201, frame=frame(50, 0, 50, 100)),
+                    eligible_window(101, frame=frame(0, 0, 50, 100)),
+                    eligible_window(201, frame=frame(50, 0, 50, 100), has_focus=True),
                 ],
-                focused_window_id=101,
+                focused_window_id=201,
                 recent_window_id=101,
             )
             runtime = WorkflowRuntime(
                 yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 201]),
+                hammerspoon=FakeHammerspoonClient([201, 101]),
                 state_store=store,
             )
 
@@ -622,11 +622,13 @@ class IntegrationInstallTests(unittest.TestCase):
                     install_hammerspoon(
                         runtime_root=runtime_root,
                         executable_path="/tmp/runtime/bin/windy",
+                        yabai_path="/opt/homebrew/bin/yabai",
                         hs_bin="/opt/homebrew/bin/hs",
                     )
                     install_hammerspoon(
                         runtime_root=runtime_root,
                         executable_path="/tmp/runtime/bin/windy",
+                        yabai_path="/opt/homebrew/bin/yabai",
                         hs_bin="/opt/homebrew/bin/hs",
                     )
 
@@ -636,6 +638,10 @@ class IntegrationInstallTests(unittest.TestCase):
             self.assertIn("BEGIN YHWM_RUNTIME_V2", final_text)
             self.assertIn("BEGIN YHWM_RUNTIME", final_text)
             self.assertIn("/tmp/runtime/bin/windy", final_text)
+            self.assertIn('/opt/homebrew/bin/yabai', final_text)
+            self.assertIn('hs.task.new("/opt/homebrew/bin/yabai"', final_text)
+            self.assertIn('"--restart-service"', final_text)
+            self.assertIn("start_windy()", final_text)
 
 
 class SubprocessHammerspoonClientTests(unittest.TestCase):
