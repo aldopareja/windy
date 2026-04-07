@@ -80,6 +80,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                     ("stack", 101, 102),
                     ("stack", 101, 103),
                     ("focus", 101),
+                    ("arm_stack", 101),
                 ],
             )
             self.assertEqual(
@@ -121,7 +122,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
 
             runtime.split("east")
 
-            self.assertEqual(client.actions, [("promote", 102, "east"), ("focus", 101)])
+            self.assertEqual(client.actions, [("promote", 102, "east"), ("focus", 101), ("arm_stack", 101)])
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
 
     def test_split_with_no_background_arms_pending_split(self) -> None:
@@ -220,6 +221,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                     ("stack", 201, 101),
                     ("stack", 201, 102),
                     ("focus", 201),
+                    ("arm_stack", 201),
                 ],
             )
 
@@ -360,6 +362,80 @@ class WorkflowRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(client.actions, [])
+
+
+    def test_reseed_arms_stack_insertion_on_focused_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                    eligible_window(102, frame=frame(0, 0, 100, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 102]),
+                state_store=store,
+            )
+
+            runtime.reseed()
+
+            self.assertIn(("arm_stack", 101), client.actions)
+
+    def test_split_promote_arms_stack_insertion(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: tracked_space(workflow_space),
+                    }
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                    eligible_window(102, frame=frame(0, 0, 100, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 102]),
+                state_store=store,
+            )
+
+            runtime.split("east")
+
+            self.assertIn(("arm_stack", 101), client.actions)
+
+    def test_delete_tile_arms_stack_insertion(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
+                    eligible_window(201, frame=frame(50, 0, 50, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=201,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 201]),
+                state_store=store,
+            )
+
+            runtime.delete_tile()
+
+            self.assertIn(("arm_stack", 201), client.actions)
 
 
 class CliTests(unittest.TestCase):

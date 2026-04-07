@@ -98,6 +98,7 @@ class WorkflowRuntime:
         for window_id in hidden_window_ids:
             self._yabai.stack_window(target.focused_window_id, window_id)
         self._yabai.focus_window(target.focused_window_id)
+        self._yabai.arm_window_stack(target.focused_window_id)
 
         self._state_store.write(
             _replace_space_state(
@@ -154,6 +155,7 @@ class WorkflowRuntime:
             self._yabai.arm_window_split(focused_tile.visible_window_id, normalized_direction)
             self._yabai.warp_window(candidate, focused_tile.visible_window_id)
         self._yabai.focus_window(focused_tile.visible_window_id)
+        self._yabai.arm_window_stack(focused_tile.visible_window_id)
 
         self._state_store.write(
             _replace_space_state(
@@ -186,6 +188,7 @@ class WorkflowRuntime:
         for window_id in focused_tile.all_window_ids:
             self._yabai.stack_window(anchor_tile.visible_window_id, window_id)
         self._yabai.focus_window(anchor_tile.visible_window_id)
+        self._yabai.arm_window_stack(anchor_tile.visible_window_id)
 
     def float_space(self) -> None:
         state = self._state_store.read()
