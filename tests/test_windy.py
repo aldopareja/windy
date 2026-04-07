@@ -578,6 +578,17 @@ class CliTests(unittest.TestCase):
             selected_was_visible_at_open=True,
         )
 
+    def test_on_window_created_command_dispatches_runtime(self) -> None:
+        runtime = MagicMock()
+        with patch.object(cli_module, "SubprocessYabaiClient", return_value=object()):
+            with patch.object(cli_module, "SubprocessHammerspoonClient", return_value=object()):
+                with patch.object(cli_module, "WorkflowRuntime", return_value=runtime):
+                    result = cli_module.main(
+                        ["on-window-created", "--window-id", "12345"]
+                    )
+        self.assertEqual(result, 0)
+        runtime.on_window_created.assert_called_once_with(12345)
+
     def test_install_hammerspoon_dispatches_install(self) -> None:
         with patch.object(cli_module, "SubprocessYabaiClient", return_value=object()):
             with patch.object(cli_module, "SubprocessHammerspoonClient", return_value=object()):

@@ -96,6 +96,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Whether the selected window was the frontmost member of its frame group when Alt-Tab opened.",
     )
 
+    on_window_created_parser = subparsers.add_parser(
+        "on-window-created",
+        help="Handle a newly created window in a tracked space.",
+    )
+    on_window_created_parser.add_argument(
+        "--window-id",
+        required=True,
+        help="macOS window server ID of the newly created window.",
+    )
+
     install_parser = subparsers.add_parser(
         "install",
         help="Install the repo-managed Hammerspoon loader and reload Hammerspoon.",
@@ -131,6 +141,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 origin_open_frame=_parse_frame(args.origin_open_frame),
                 selected_open_frame=_parse_frame(args.selected_open_frame),
                 selected_was_visible_at_open=bool(args.selected_was_visible_at_open),
+            )
+        elif args.command == "on-window-created":
+            runtime.on_window_created(
+                _parse_window_id("on-window-created", args.window_id),
             )
         elif args.command == "install":
             executable_path = str(Path(__file__).resolve().parents[1] / "bin" / "windy")
