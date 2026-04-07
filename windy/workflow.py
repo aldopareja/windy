@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Optional
 
@@ -292,10 +293,17 @@ class WorkflowRuntime:
         self._yabai.focus_window(selected_window_id)
 
 
-    def on_window_created(self, window_id: int) -> None:
-        self._yabai.rediscover_window(window_id)
+    def _rediscover_and_query(self, window_id: int) -> Optional[dict[str, Any]]:
+        for attempt in range(5):
+            self._yabai.rediscover_window(window_id)
+            window = _query_window_record_or_none(self._yabai, window_id)
+            if window is not None and window.get("has-ax-reference") is not False:
+                return window
+            time.sleep(0.2)
+        return None
 
-        window = _query_window_record_or_none(self._yabai, window_id)
+    def on_window_created(self, window_id: int) -> None:
+        window = self._rediscover_and_query(window_id)
         if window is None:
             return
 
