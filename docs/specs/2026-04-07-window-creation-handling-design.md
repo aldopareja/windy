@@ -29,9 +29,9 @@ This eliminates ghost windows as a category. Every window can be made known to y
 **Invocation:** `yabai -m window --rediscover <window_server_id>`
 **Success:** exit 0, no output. Window is immediately available for `--stack`, `--focus`, etc.
 **Failure:** exit 1, error on stderr.
-**Tiling:** The window is added to the table but NOT inserted into the BSP tree. The caller must explicitly place it.
+**Tiling:** The window is added to yabai's table and tiled into the current space's BSP tree, creating a new split. The caller must absorb this split if stacking is desired.
 
-**Note:** `--rediscover` calls `window_manager_add_existing_application_windows()` which re-scans ALL windows for the owning application, not just the target. Other untracked windows from the same app are also added. This is beneficial for recovery but means a single `--rediscover` call may add multiple windows to the BSP tree.
+**Note:** `--rediscover` calls `window_manager_add_existing_application_windows()` which re-scans ALL windows for the owning application, not just the target. Other untracked windows from the same app are also added and tiled. The space-level absorption in `on_window_created` handles this — any resulting solo tiles are absorbed into the anchor.
 
 ### Layer 2: yabai Signal and Space-Level Absorption
 
@@ -134,7 +134,7 @@ No additional yabai changes needed for v2.
 - `arm_window_stack(window_id)` — no longer used
 
 **Add** to `YabaiClient` Protocol and `SubprocessYabaiClient`:
-- `add_signal(label, event, action)`: wraps `yabai -m signal --add label=<label> event=<event> action=<action>`
+- `add_signal(label, event, action)`: wraps `yabai -m signal --add label=<label> event=<event> action=<action>`. The action string may contain spaces and `$YABAI_WINDOW_ID`; the implementation must ensure correct quoting so yabai's tokenizer treats the entire action as one value.
 - `remove_signal(label)`: wraps `yabai -m signal --remove <label>`. Raises `WorkflowError` on failure (caller catches if signal doesn't exist).
 
 ### windy/workflow.py
