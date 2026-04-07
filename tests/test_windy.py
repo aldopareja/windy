@@ -69,6 +69,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 102, 103]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.reseed()
@@ -80,7 +81,8 @@ class WorkflowRuntimeTests(unittest.TestCase):
                     ("stack", 101, 102),
                     ("stack", 101, 103),
                     ("focus", 101),
-                    ("arm_stack", 101),
+                    ("remove_signal", "windy_absorb"),
+                    ("add_signal", "windy_absorb", "window_created"),
                 ],
             )
             self.assertEqual(
@@ -118,11 +120,12 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 102]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.split("east")
 
-            self.assertEqual(client.actions, [("promote", 102, "east"), ("focus", 101), ("arm_stack", 101)])
+            self.assertEqual(client.actions, [("promote", 102, "east"), ("focus", 101)])
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
 
     def test_split_with_no_background_arms_pending_split(self) -> None:
@@ -145,6 +148,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.split("south")
@@ -186,12 +190,38 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.navigate("east")
 
             self.assertEqual(client.actions, [("focus_direction", "east")])
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
+
+    def test_reseed_registers_absorb_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101]),
+                state_store=store,
+                windy_bin="/test/bin/windy",
+            )
+
+            runtime.reseed()
+
+            self.assertIn(("remove_signal", "windy_absorb"), client.actions)
+            signal_adds = [a for a in client.actions if a[0] == "add_signal"]
+            self.assertEqual(len(signal_adds), 1)
+            self.assertEqual(signal_adds[0][1], "windy_absorb")
+            self.assertEqual(signal_adds[0][2], "window_created")
 
     def test_delete_tile_merges_focused_tile_into_recent_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -211,6 +241,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 201, 102]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.delete_tile()
@@ -221,7 +252,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                     ("stack", 201, 101),
                     ("stack", 201, 102),
                     ("focus", 201),
-                    ("arm_stack", 201),
                 ],
             )
 
@@ -239,12 +269,34 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.float_space()
 
-            self.assertEqual(client.actions, [("set_layout", 2, "float")])
+            self.assertEqual(client.actions, [("set_layout", 2, "float"), ("remove_signal", "windy_absorb")])
             self.assertEqual(store.read().spaces, {})
+
+    def test_float_removes_signal_when_last_tracked_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True)],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101]),
+                state_store=store,
+                windy_bin="/test/bin/windy",
+            )
+
+            runtime.float_space()
+
+            self.assertIn(("remove_signal", "windy_absorb"), client.actions)
 
     def test_alttab_visible_target_swaps_visible_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -263,6 +315,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([201, 101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -293,6 +346,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([202, 101, 201]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -322,6 +376,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([102, 101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -351,6 +406,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([301, 101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -362,81 +418,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(client.actions, [])
-
-
-    def test_reseed_arms_stack_insertion_on_focused_window(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            store = RuntimeStateStore(Path(tempdir) / "state.json")
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
-                    eligible_window(102, frame=frame(0, 0, 100, 100)),
-                ],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-            runtime = WorkflowRuntime(
-                yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 102]),
-                state_store=store,
-            )
-
-            runtime.reseed()
-
-            self.assertIn(("arm_stack", 101), client.actions)
-
-    def test_split_promote_arms_stack_insertion(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            store = RuntimeStateStore(Path(tempdir) / "state.json")
-            store.write(
-                RuntimeState(
-                    spaces={
-                        workflow_space.storage_key: tracked_space(workflow_space),
-                    }
-                )
-            )
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
-                    eligible_window(102, frame=frame(0, 0, 100, 100)),
-                ],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-            runtime = WorkflowRuntime(
-                yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 102]),
-                state_store=store,
-            )
-
-            runtime.split("east")
-
-            self.assertIn(("arm_stack", 101), client.actions)
-
-    def test_delete_tile_arms_stack_insertion(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            store = RuntimeStateStore(Path(tempdir) / "state.json")
-            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
-                    eligible_window(201, frame=frame(50, 0, 50, 100)),
-                ],
-                focused_window_id=101,
-                recent_window_id=201,
-            )
-            runtime = WorkflowRuntime(
-                yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 201]),
-                state_store=store,
-            )
-
-            runtime.delete_tile()
-
-            self.assertIn(("arm_stack", 201), client.actions)
-
 
     def test_on_window_created_exits_for_untracked_space(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -452,13 +433,14 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(101)
 
             self.assertEqual(client.actions, [("rediscover", 101)])
 
-    def test_on_window_created_absorbs_unwanted_split(self) -> None:
+    def test_on_window_created_absorbs_solo_tile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             store = RuntimeStateStore(Path(tempdir) / "state.json")
@@ -466,6 +448,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
             client = FakeYabaiClient(
                 windows=[
                     eligible_window(101, frame=frame(0, 0, 50, 100)),
+                    eligible_window(102, frame=frame(0, 0, 50, 100)),
                     eligible_window(201, frame=frame(50, 0, 50, 100), has_focus=True),
                 ],
                 focused_window_id=201,
@@ -473,16 +456,68 @@ class WorkflowRuntimeTests(unittest.TestCase):
             )
             runtime = WorkflowRuntime(
                 yabai=client,
-                hammerspoon=FakeHammerspoonClient([201, 101]),
+                hammerspoon=FakeHammerspoonClient([201, 101, 102]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(201)
 
-            self.assertIn(("rediscover", 201), client.actions)
             self.assertIn(("stack", 101, 201), client.actions)
             self.assertIn(("focus", 201), client.actions)
-            self.assertIn(("arm_stack", 201), client.actions)
+
+    def test_on_window_created_absorbs_multiple_solo_tiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 34, 100)),
+                    eligible_window(102, frame=frame(0, 0, 34, 100)),
+                    eligible_window(201, frame=frame(34, 0, 33, 100)),
+                    eligible_window(301, frame=frame(67, 0, 33, 100), has_focus=True),
+                ],
+                focused_window_id=301,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([301, 101, 102, 201]),
+                state_store=store,
+                windy_bin="/test/bin/windy",
+            )
+
+            runtime.on_window_created(301)
+
+            stack_actions = [a for a in client.actions if a[0] == "stack"]
+            stacked_ids = {a[2] for a in stack_actions}
+            self.assertEqual(stacked_ids, {201, 301})
+
+    def test_on_window_created_idempotent_when_no_solo_tiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                    eligible_window(102, frame=frame(0, 0, 100, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 102]),
+                state_store=store,
+                windy_bin="/test/bin/windy",
+            )
+
+            runtime.on_window_created(102)
+
+            stack_actions = [a for a in client.actions if a[0] == "stack"]
+            self.assertEqual(stack_actions, [])
 
     def test_on_window_created_preserves_intentional_split(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -504,26 +539,27 @@ class WorkflowRuntimeTests(unittest.TestCase):
             )
             client = FakeYabaiClient(
                 windows=[
-                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
-                    eligible_window(201, frame=frame(50, 0, 50, 100)),
+                    eligible_window(101, frame=frame(0, 0, 50, 100)),
+                    eligible_window(102, frame=frame(0, 0, 50, 100)),
+                    eligible_window(201, frame=frame(50, 0, 50, 100), has_focus=True),
                 ],
-                focused_window_id=101,
+                focused_window_id=201,
                 recent_window_id=101,
             )
             runtime = WorkflowRuntime(
                 yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 201]),
+                hammerspoon=FakeHammerspoonClient([201, 101, 102]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(201)
 
             stack_actions = [a for a in client.actions if a[0] == "stack"]
             self.assertEqual(stack_actions, [])
-            self.assertIn(("arm_stack", 101), client.actions)
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
 
-    def test_on_window_created_noop_when_already_stacked(self) -> None:
+    def test_on_window_created_exits_when_window_destroyed(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             store = RuntimeStateStore(Path(tempdir) / "state.json")
@@ -531,22 +567,21 @@ class WorkflowRuntimeTests(unittest.TestCase):
             client = FakeYabaiClient(
                 windows=[
                     eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
-                    eligible_window(102, frame=frame(0, 0, 100, 100)),
                 ],
                 focused_window_id=101,
                 recent_window_id=101,
             )
             runtime = WorkflowRuntime(
                 yabai=client,
-                hammerspoon=FakeHammerspoonClient([101, 102]),
+                hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
+                windy_bin="/test/bin/windy",
             )
 
-            runtime.on_window_created(102)
+            runtime.on_window_created(999)
 
             stack_actions = [a for a in client.actions if a[0] == "stack"]
             self.assertEqual(stack_actions, [])
-            self.assertIn(("arm_stack", 101), client.actions)
 
 class CliTests(unittest.TestCase):
     def test_alttab_command_dispatches_runtime_with_parsed_frames(self) -> None:
@@ -785,12 +820,15 @@ class FakeYabaiClient:
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         self.actions.append(("swap", window_id, target_window_id))
 
-    def arm_window_stack(self, window_id: int) -> None:
-        self.actions.append(("arm_stack", window_id))
-
     def rediscover_window(self, window_id: int) -> bool:
         self.actions.append(("rediscover", window_id))
         return window_id in self._windows
+
+    def add_signal(self, *, label: str, event: str, action: str) -> None:
+        self.actions.append(("add_signal", label, event))
+
+    def remove_signal(self, label: str) -> None:
+        self.actions.append(("remove_signal", label))
 
     def _set_focus(self, window_id: int) -> None:
         self._focused_window_id = window_id

@@ -52,10 +52,12 @@ class WorkflowRuntime:
         yabai: YabaiClient,
         hammerspoon: HammerspoonClient,
         state_store: RuntimeStateStore,
+        windy_bin: str,
     ):
         self._yabai = yabai
         self._hammerspoon = hammerspoon
         self._state_store = state_store
+        self._windy_bin = windy_bin
 
     def navigate(self, direction: str) -> None:
         normalized_direction = direction.strip().lower()
@@ -98,7 +100,6 @@ class WorkflowRuntime:
         for window_id in hidden_window_ids:
             self._yabai.stack_window(target.focused_window_id, window_id)
         self._yabai.focus_window(target.focused_window_id)
-        self._yabai.arm_window_stack(target.focused_window_id)
 
         self._state_store.write(
             _replace_space_state(
@@ -108,6 +109,16 @@ class WorkflowRuntime:
                     pending_split=None,
                 ),
             )
+        )
+
+        try:
+            self._yabai.remove_signal("windy_absorb")
+        except WorkflowError:
+            pass
+        self._yabai.add_signal(
+            label="windy_absorb",
+            event="window_created",
+            action=f"{self._windy_bin} on-window-created --window-id $YABAI_WINDOW_ID",
         )
 
     def split(self, direction: str) -> None:
@@ -155,7 +166,6 @@ class WorkflowRuntime:
             self._yabai.arm_window_split(focused_tile.visible_window_id, normalized_direction)
             self._yabai.warp_window(candidate, focused_tile.visible_window_id)
         self._yabai.focus_window(focused_tile.visible_window_id)
-        self._yabai.arm_window_stack(focused_tile.visible_window_id)
 
         self._state_store.write(
             _replace_space_state(
@@ -188,7 +198,6 @@ class WorkflowRuntime:
         for window_id in focused_tile.all_window_ids:
             self._yabai.stack_window(anchor_tile.visible_window_id, window_id)
         self._yabai.focus_window(anchor_tile.visible_window_id)
-        self._yabai.arm_window_stack(anchor_tile.visible_window_id)
 
     def float_space(self) -> None:
         state = self._state_store.read()
@@ -202,7 +211,13 @@ class WorkflowRuntime:
             return
 
         self._yabai.set_space_layout(context.workflow_space.space, "float")
-        self._state_store.write(_delete_space_state(context.state, context.workflow_space))
+        updated_state = _delete_space_state(context.state, context.workflow_space)
+        self._state_store.write(updated_state)
+        if not updated_state.spaces:
+            try:
+                self._yabai.remove_signal("windy_absorb")
+            except WorkflowError:
+                pass
 
     def alttab(self, *, origin_window_id: int, selected_window_id: int, origin_open_frame: NormalizedFrame, selected_open_frame: NormalizedFrame, selected_was_visible_at_open: bool) -> None:
         if origin_window_id == selected_window_id:
@@ -317,33 +332,26 @@ class WorkflowRuntime:
         state, tracked = self._reconcile_tracked_space(state, tracked, snapshot)
         if tracked is None:
             return
-        pending_split_was_consumed = had_pending_split and tracked.pending_split is None
+        pending_split_consumed = had_pending_split and tracked.pending_split is None
 
-        focused_window = _query_focused_window_record_or_none(self._yabai)
-        if focused_window is None:
-            return
-        focused_window_id = int(focused_window["id"])
-
-        if focused_window_id == window_id:
-            recent_window = _query_recent_window_or_none(self._yabai)
-            if recent_window is not None:
-                focused_window_id = int(recent_window["id"])
-
-        anchor_tile = snapshot.tile_for_window(focused_window_id)
+        anchor_tile = _find_anchor_tile(snapshot)
         if anchor_tile is None:
             return
 
-        new_tile = snapshot.tile_for_window(window_id)
-        already_in_anchor_tile = (
-            new_tile is not None and new_tile.frame == anchor_tile.frame
-        )
+        absorbed: list[int] = []
+        for tile in snapshot.tiles:
+            if tile.frame == anchor_tile.frame:
+                continue
+            if len(tile.all_window_ids) != 1:
+                continue
+            solo_id = tile.visible_window_id
+            if pending_split_consumed and solo_id == window_id:
+                continue
+            self._yabai.stack_window(anchor_tile.visible_window_id, solo_id)
+            absorbed.append(solo_id)
 
-        if not already_in_anchor_tile and not pending_split_was_consumed:
-            self._yabai.stack_window(anchor_tile.visible_window_id, window_id)
+        if window_id in absorbed:
             self._yabai.focus_window(window_id)
-            focused_window_id = window_id
-
-        self._yabai.arm_window_stack(focused_window_id)
 
     def _current_context(
         self,
@@ -520,6 +528,12 @@ def _choose_delete_anchor_tile(
         if deleted_tile is None or tile.frame != deleted_tile.frame:
             return tile
     return None
+
+
+def _find_anchor_tile(snapshot: _LiveSpaceSnapshot) -> Optional[LiveTile]:
+    if not snapshot.tiles:
+        return None
+    return max(snapshot.tiles, key=lambda t: len(t.all_window_ids))
 
 
 def _normalized_frame(window: Mapping[str, Any]) -> NormalizedFrame:

@@ -121,7 +121,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     state_store = RuntimeStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
     hammerspoon = SubprocessHammerspoonClient(args.hs_bin)
-    runtime = WorkflowRuntime(yabai=yabai, hammerspoon=hammerspoon, state_store=state_store)
+    windy_bin = str(Path(__file__).resolve().parents[1] / "bin" / "windy")
+    runtime = WorkflowRuntime(
+        yabai=yabai,
+        hammerspoon=hammerspoon,
+        state_store=state_store,
+        windy_bin=windy_bin,
+    )
 
     try:
         if args.command == "reseed":
@@ -152,6 +158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 install_hammerspoon(
                     runtime_root=Path(__file__).resolve().parents[1],
                     executable_path=executable_path,
+                    yabai_path=args.yabai_bin,
                     hs_bin=args.hs_bin,
                 )
             else:
