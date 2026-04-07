@@ -276,6 +276,70 @@ class WorkflowRuntime:
         self._yabai.stack_window(origin_tile.visible_window_id, selected_window_id)
         self._yabai.focus_window(selected_window_id)
 
+
+    def on_window_created(self, window_id: int) -> None:
+        self._yabai.rediscover_window(window_id)
+
+        window = _query_window_record_or_none(self._yabai, window_id)
+        if window is None:
+            return
+
+        workflow_space = _derive_workflow_space_or_none(
+            window, description=f"new window {window_id}",
+        )
+        if workflow_space is None:
+            return
+
+        state = self._state_store.read()
+        tracked = state.spaces.get(workflow_space.storage_key)
+        if tracked is None:
+            return
+
+        try:
+            validate_workflow_space(
+                self._yabai,
+                workflow_space=workflow_space,
+                allowed_layouts=("bsp",),
+            )
+        except WorkflowError:
+            return
+
+        if not is_eligible_window(
+            window,
+            target_display=workflow_space.display,
+            target_space=workflow_space.space,
+        ):
+            return
+
+        snapshot = self._live_snapshot(workflow_space)
+
+        had_pending_split = tracked.pending_split is not None
+        state, tracked = self._reconcile_tracked_space(state, tracked, snapshot)
+        if tracked is None:
+            return
+        pending_split_was_consumed = had_pending_split and tracked.pending_split is None
+
+        focused_window = _query_focused_window_record_or_none(self._yabai)
+        if focused_window is None:
+            return
+        focused_window_id = int(focused_window["id"])
+
+        focused_tile = snapshot.tile_for_window(focused_window_id)
+        if focused_tile is None:
+            return
+
+        new_tile = snapshot.tile_for_window(window_id)
+        already_in_focused_tile = (
+            new_tile is not None and new_tile.frame == focused_tile.frame
+        )
+
+        if not already_in_focused_tile and not pending_split_was_consumed:
+            self._yabai.stack_window(focused_tile.visible_window_id, window_id)
+            self._yabai.focus_window(window_id)
+            focused_window_id = window_id
+
+        self._yabai.arm_window_stack(focused_window_id)
+
     def _current_context(
         self,
         *,

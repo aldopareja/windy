@@ -438,6 +438,116 @@ class WorkflowRuntimeTests(unittest.TestCase):
             self.assertIn(("arm_stack", 201), client.actions)
 
 
+    def test_on_window_created_exits_for_untracked_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101]),
+                state_store=store,
+            )
+
+            runtime.on_window_created(101)
+
+            self.assertEqual(client.actions, [("rediscover", 101)])
+
+    def test_on_window_created_absorbs_unwanted_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
+                    eligible_window(201, frame=frame(50, 0, 50, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 201]),
+                state_store=store,
+            )
+
+            runtime.on_window_created(201)
+
+            self.assertIn(("rediscover", 201), client.actions)
+            self.assertIn(("stack", 101, 201), client.actions)
+            self.assertIn(("focus", 201), client.actions)
+            self.assertIn(("arm_stack", 201), client.actions)
+
+    def test_on_window_created_preserves_intentional_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(
+                RuntimeState(
+                    spaces={
+                        workflow_space.storage_key: tracked_space(
+                            workflow_space,
+                            pending_split=PendingSplit(
+                                direction="east",
+                                anchor_window_id=101,
+                                anchor_frame=NormalizedFrame(x=0, y=0, w=100, h=100),
+                            ),
+                        ),
+                    }
+                )
+            )
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 50, 100), has_focus=True),
+                    eligible_window(201, frame=frame(50, 0, 50, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 201]),
+                state_store=store,
+            )
+
+            runtime.on_window_created(201)
+
+            stack_actions = [a for a in client.actions if a[0] == "stack"]
+            self.assertEqual(stack_actions, [])
+            self.assertIn(("arm_stack", 101), client.actions)
+            self.assertIsNone(store.read().spaces["1:2"].pending_split)
+
+    def test_on_window_created_noop_when_already_stacked(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                    eligible_window(102, frame=frame(0, 0, 100, 100)),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101, 102]),
+                state_store=store,
+            )
+
+            runtime.on_window_created(102)
+
+            stack_actions = [a for a in client.actions if a[0] == "stack"]
+            self.assertEqual(stack_actions, [])
+            self.assertIn(("arm_stack", 101), client.actions)
+
 class CliTests(unittest.TestCase):
     def test_alttab_command_dispatches_runtime_with_parsed_frames(self) -> None:
         runtime = MagicMock()
