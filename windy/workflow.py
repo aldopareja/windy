@@ -338,20 +338,14 @@ class WorkflowRuntime:
         if anchor_tile is None:
             return
 
-        absorbed: list[int] = []
-        for tile in snapshot.tiles:
-            if tile.frame == anchor_tile.frame:
-                continue
-            if len(tile.all_window_ids) != 1:
-                continue
-            solo_id = tile.visible_window_id
-            if pending_split_consumed and solo_id == window_id:
-                continue
-            self._yabai.stack_window(anchor_tile.visible_window_id, solo_id)
-            absorbed.append(solo_id)
+        new_tile = snapshot.tile_for_window(window_id)
+        if new_tile is None or new_tile.frame == anchor_tile.frame:
+            return
+        if pending_split_consumed:
+            return
 
-        if window_id in absorbed:
-            self._yabai.focus_window(window_id)
+        self._yabai.stack_window(anchor_tile.visible_window_id, window_id)
+        self._yabai.focus_window(window_id)
 
     def _current_context(
         self,

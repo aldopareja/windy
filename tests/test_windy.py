@@ -466,7 +466,7 @@ class WorkflowRuntimeTests(unittest.TestCase):
             self.assertIn(("stack", 101, 201), client.actions)
             self.assertIn(("focus", 201), client.actions)
 
-    def test_on_window_created_absorbs_multiple_solo_tiles(self) -> None:
+    def test_on_window_created_absorbs_only_triggering_window(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workflow_space = EligibleWorkflowSpace(display=1, space=2)
             store = RuntimeStateStore(Path(tempdir) / "state.json")
@@ -491,8 +491,8 @@ class WorkflowRuntimeTests(unittest.TestCase):
             runtime.on_window_created(301)
 
             stack_actions = [a for a in client.actions if a[0] == "stack"]
-            stacked_ids = {a[2] for a in stack_actions}
-            self.assertEqual(stacked_ids, {201, 301})
+            self.assertEqual(len(stack_actions), 1)
+            self.assertEqual(stack_actions[0], ("stack", 101, 301))
 
     def test_on_window_created_idempotent_when_no_solo_tiles(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
