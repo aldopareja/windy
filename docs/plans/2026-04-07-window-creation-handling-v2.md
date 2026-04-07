@@ -143,7 +143,7 @@ In `windy/tests/test_windy.py`, add `windy_bin="/test/bin/windy"` to EVERY `Work
             )
 ```
 
-Search for `WorkflowRuntime(` in the test file and update each one.
+Search for `WorkflowRuntime(` in the test file and update every instance. (CLI tests that mock `WorkflowRuntime` entirely via `patch.object` do not need `windy_bin`.)
 
 - [ ] **Step 4: Run tests**
 
@@ -350,6 +350,12 @@ In `test_delete_tile_merges_focused_tile_into_recent_sibling`, remove `("arm_sta
             )
 ```
 
+In `test_float_clears_tracking`, add `("remove_signal", "windy_absorb")` to expected actions (float_space now removes the signal when no tracked spaces remain):
+
+```python
+            self.assertEqual(client.actions, [("set_layout", 2, "float"), ("remove_signal", "windy_absorb")])
+```
+
 - [ ] **Step 9: Run all tests**
 
 ```bash
@@ -511,11 +517,39 @@ Replace the existing `test_on_window_created_absorbs_unwanted_split`:
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
 ```
 
-- [ ] **Step 5: Delete old `test_on_window_created_noop_when_already_stacked`**
+- [ ] **Step 5: Write test — window destroyed before signal fires**
+
+```python
+    def test_on_window_created_exits_when_window_destroyed(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workflow_space = EligibleWorkflowSpace(display=1, space=2)
+            store = RuntimeStateStore(Path(tempdir) / "state.json")
+            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
+            client = FakeYabaiClient(
+                windows=[
+                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
+                ],
+                focused_window_id=101,
+                recent_window_id=101,
+            )
+            runtime = WorkflowRuntime(
+                yabai=client,
+                hammerspoon=FakeHammerspoonClient([101]),
+                state_store=store,
+                windy_bin="/test/bin/windy",
+            )
+
+            runtime.on_window_created(999)
+
+            stack_actions = [a for a in client.actions if a[0] == "stack"]
+            self.assertEqual(stack_actions, [])
+```
+
+- [ ] **Step 6: Delete old `test_on_window_created_noop_when_already_stacked`**
 
 Remove this test entirely — replaced by `test_on_window_created_idempotent_when_no_solo_tiles`.
 
-- [ ] **Step 6: Implement `_find_anchor_tile` helper**
+- [ ] **Step 7: Implement `_find_anchor_tile` helper**
 
 In `windy/windy/workflow.py`, add after `_choose_delete_anchor_tile` (after line 522):
 
@@ -526,7 +560,7 @@ def _find_anchor_tile(snapshot: _LiveSpaceSnapshot) -> Optional[LiveTile]:
     return max(snapshot.tiles, key=lambda t: len(t.all_window_ids))
 ```
 
-- [ ] **Step 7: Rewrite `on_window_created` method**
+- [ ] **Step 8: Rewrite `on_window_created` method**
 
 Replace the entire `on_window_created` method (lines 280-346) with:
 
@@ -593,7 +627,7 @@ Replace the entire `on_window_created` method (lines 280-346) with:
             self._yabai.focus_window(window_id)
 ```
 
-- [ ] **Step 8: Run all tests**
+- [ ] **Step 9: Run all tests**
 
 ```bash
 cd /Users/aldo/cwd_v2/windy && python3 -m unittest tests.test_windy -v
@@ -601,7 +635,7 @@ cd /Users/aldo/cwd_v2/windy && python3 -m unittest tests.test_windy -v
 
 Expected: All tests pass (27 - 2 removed + 3 added = 28). Count may vary slightly based on updates in Task 3 — verify total and that all pass.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 cd /Users/aldo/cwd_v2/windy
