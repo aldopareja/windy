@@ -21,10 +21,6 @@ local function stopExisting()
       hotkey:delete()
     end
   end
-  if runtimeState.windowFilter ~= nil then
-    runtimeState.windowFilter:unsubscribeAll()
-    runtimeState.windowFilter = nil
-  end
 end
 
 local function focusedWindowId()
@@ -232,17 +228,6 @@ function module.start(config)
 
   state.keyDownTap:start()
   state.flagsTap:start()
-
-  local wf = hs.window.filter.new(true)
-  wf:subscribe(hs.window.filter.windowCreated, function(win)
-    if win == nil then return end
-    local windowId = win:id()
-    if windowId == nil then return end
-    hs.timer.doAfter(0.5, function()
-      runWindy(state, {"on-window-created", "--window-id", tostring(windowId)})
-    end)
-  end)
-  state.windowFilter = wf
 end
 
 return module
