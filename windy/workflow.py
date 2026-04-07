@@ -118,7 +118,7 @@ class WorkflowRuntime:
         self._yabai.add_signal(
             label="windy_absorb",
             event="window_created",
-            action=f"{self._windy_bin} on-window-created --window-id $YABAI_WINDOW_ID",
+            action=f"sleep 0.3 && {self._windy_bin} on-window-created --window-id $YABAI_WINDOW_ID",
         )
 
     def split(self, direction: str) -> None:
