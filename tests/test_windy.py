@@ -582,6 +582,13 @@ class FakeYabaiClient:
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         self.actions.append(("swap", window_id, target_window_id))
 
+    def arm_window_stack(self, window_id: int) -> None:
+        self.actions.append(("arm_stack", window_id))
+
+    def rediscover_window(self, window_id: int) -> bool:
+        self.actions.append(("rediscover", window_id))
+        return window_id in self._windows
+
     def _set_focus(self, window_id: int) -> None:
         self._focused_window_id = window_id
         self._recent_window_id = window_id

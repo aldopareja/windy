@@ -53,6 +53,10 @@ class YabaiClient(Protocol):
     def swap_window(self, window_id: int, target_window_id: int) -> None:
         ...
 
+    def arm_window_stack(self, window_id: int) -> None: ...
+
+    def rediscover_window(self, window_id: int) -> bool: ...
+
 class SubprocessYabaiClient:
     def __init__(self, yabai_bin: str = "yabai"):
         self._yabai_bin = yabai_bin
@@ -189,6 +193,22 @@ class SubprocessYabaiClient:
                 f"{window_id} and {target_window_id}"
             ),
         )
+
+    def arm_window_stack(self, window_id: int) -> None:
+        self._run_text(
+            ["-m", "window", str(window_id), "--insert", "stack"],
+            error_context=f"Failed to arm stack insertion on window {window_id}",
+        )
+
+    def rediscover_window(self, window_id: int) -> bool:
+        try:
+            self._run_text(
+                ["-m", "window", "--rediscover", str(window_id)],
+                error_context=f"Failed to rediscover window {window_id}",
+            )
+            return True
+        except WorkflowError:
+            return False
 
     def _run_json(self, arguments: List[str], *, error_context: str) -> Any:
         output = self._run(arguments, error_context=error_context)
