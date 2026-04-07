@@ -53,12 +53,10 @@ class WorkflowRuntime:
         yabai: YabaiClient,
         hammerspoon: HammerspoonClient,
         state_store: RuntimeStateStore,
-        windy_bin: str,
     ):
         self._yabai = yabai
         self._hammerspoon = hammerspoon
         self._state_store = state_store
-        self._windy_bin = windy_bin
 
     def navigate(self, direction: str) -> None:
         normalized_direction = direction.strip().lower()
@@ -110,16 +108,6 @@ class WorkflowRuntime:
                     pending_split=None,
                 ),
             )
-        )
-
-        try:
-            self._yabai.remove_signal("windy_absorb")
-        except WorkflowError:
-            pass
-        self._yabai.add_signal(
-            label="windy_absorb",
-            event="window_created",
-            action=f"sleep 0.3 && {self._windy_bin} on-window-created --window-id $YABAI_WINDOW_ID",
         )
 
     def split(self, direction: str) -> None:
@@ -214,11 +202,6 @@ class WorkflowRuntime:
         self._yabai.set_space_layout(context.workflow_space.space, "float")
         updated_state = _delete_space_state(context.state, context.workflow_space)
         self._state_store.write(updated_state)
-        if not updated_state.spaces:
-            try:
-                self._yabai.remove_signal("windy_absorb")
-            except WorkflowError:
-                pass
 
     def alttab(self, *, origin_window_id: int, selected_window_id: int, origin_open_frame: NormalizedFrame, selected_open_frame: NormalizedFrame, selected_was_visible_at_open: bool) -> None:
         if origin_window_id == selected_window_id:

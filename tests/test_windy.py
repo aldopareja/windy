@@ -69,7 +69,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 102, 103]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.reseed()
@@ -81,8 +80,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                     ("stack", 101, 102),
                     ("stack", 101, 103),
                     ("focus", 101),
-                    ("remove_signal", "windy_absorb"),
-                    ("add_signal", "windy_absorb", "window_created"),
                 ],
             )
             self.assertEqual(
@@ -120,7 +117,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 102]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.split("east")
@@ -148,7 +144,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.split("south")
@@ -190,38 +185,12 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.navigate("east")
 
             self.assertEqual(client.actions, [("focus_direction", "east")])
             self.assertIsNone(store.read().spaces["1:2"].pending_split)
-
-    def test_reseed_registers_absorb_signal(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            store = RuntimeStateStore(Path(tempdir) / "state.json")
-            client = FakeYabaiClient(
-                windows=[
-                    eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True),
-                ],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-            runtime = WorkflowRuntime(
-                yabai=client,
-                hammerspoon=FakeHammerspoonClient([101]),
-                state_store=store,
-                windy_bin="/test/bin/windy",
-            )
-
-            runtime.reseed()
-
-            self.assertIn(("remove_signal", "windy_absorb"), client.actions)
-            signal_adds = [a for a in client.actions if a[0] == "add_signal"]
-            self.assertEqual(len(signal_adds), 1)
-            self.assertEqual(signal_adds[0][1], "windy_absorb")
-            self.assertEqual(signal_adds[0][2], "window_created")
 
     def test_delete_tile_merges_focused_tile_into_recent_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -241,7 +210,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 201, 102]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.delete_tile()
@@ -269,34 +237,12 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.float_space()
 
-            self.assertEqual(client.actions, [("set_layout", 2, "float"), ("remove_signal", "windy_absorb")])
+            self.assertEqual(client.actions, [("set_layout", 2, "float")])
             self.assertEqual(store.read().spaces, {})
-
-    def test_float_removes_signal_when_last_tracked_space(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            workflow_space = EligibleWorkflowSpace(display=1, space=2)
-            store = RuntimeStateStore(Path(tempdir) / "state.json")
-            store.write(RuntimeState(spaces={workflow_space.storage_key: tracked_space(workflow_space)}))
-            client = FakeYabaiClient(
-                windows=[eligible_window(101, frame=frame(0, 0, 100, 100), has_focus=True)],
-                focused_window_id=101,
-                recent_window_id=101,
-            )
-            runtime = WorkflowRuntime(
-                yabai=client,
-                hammerspoon=FakeHammerspoonClient([101]),
-                state_store=store,
-                windy_bin="/test/bin/windy",
-            )
-
-            runtime.float_space()
-
-            self.assertIn(("remove_signal", "windy_absorb"), client.actions)
 
     def test_alttab_visible_target_swaps_visible_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -315,7 +261,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([201, 101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -346,7 +291,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([202, 101, 201]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -376,7 +320,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([102, 101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -406,7 +349,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([301, 101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.alttab(
@@ -433,7 +375,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(101)
@@ -458,7 +399,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([201, 101, 102]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(201)
@@ -485,7 +425,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([301, 101, 102, 201]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(301)
@@ -511,7 +450,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101, 102]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(102)
@@ -550,7 +488,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([201, 101, 102]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(201)
@@ -575,7 +512,6 @@ class WorkflowRuntimeTests(unittest.TestCase):
                 yabai=client,
                 hammerspoon=FakeHammerspoonClient([101]),
                 state_store=store,
-                windy_bin="/test/bin/windy",
             )
 
             runtime.on_window_created(999)
@@ -823,12 +759,6 @@ class FakeYabaiClient:
     def rediscover_window(self, window_id: int) -> bool:
         self.actions.append(("rediscover", window_id))
         return window_id in self._windows
-
-    def add_signal(self, *, label: str, event: str, action: str) -> None:
-        self.actions.append(("add_signal", label, event))
-
-    def remove_signal(self, label: str) -> None:
-        self.actions.append(("remove_signal", label))
 
     def _set_focus(self, window_id: int) -> None:
         self._focused_window_id = window_id

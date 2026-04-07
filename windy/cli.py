@@ -121,12 +121,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     state_store = RuntimeStateStore(Path(args.state_file))
     yabai = SubprocessYabaiClient(args.yabai_bin)
     hammerspoon = SubprocessHammerspoonClient(args.hs_bin)
-    windy_bin = str(Path(__file__).resolve().parents[1] / "bin" / "windy")
     runtime = WorkflowRuntime(
         yabai=yabai,
         hammerspoon=hammerspoon,
         state_store=state_store,
-        windy_bin=windy_bin,
     )
 
     try:
